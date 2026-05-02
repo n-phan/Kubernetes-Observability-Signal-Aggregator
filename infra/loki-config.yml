@@ -1,0 +1,49 @@
+# Loki configuration for the demo observability stack.
+#
+# Loki is a log aggregation system. This minimal config:
+# - Runs an in-memory ingester (no persistence, but fine for demos)
+# - Stores logs in /loki (mounted as a volume in docker-compose.yml)
+# - Exposes the query API on :3100
+
+auth_enabled: false
+
+ingester:
+  chunk_idle_period: 3m
+  max_chunk_age: 1h
+  lifecycler:
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+
+limits_config:
+  enforce_metric_name: false
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: boltdb-shipper
+      object_store: filesystem
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  boltdb_shipper:
+    active_index_directory: /loki/boltdb-shipper-active
+    shared_store: filesystem
+  filesystem:
+    directory: /loki/chunks
+
+server:
+  http_listen_port: 3100
+  log_level: info
+
+# Distributor config — tells Loki to accept logs from push clients
+distributor:
+  ring:
+    kvstore:
+      store: inmemory
