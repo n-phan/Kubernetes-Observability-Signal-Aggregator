@@ -25,7 +25,7 @@ from aggregator.models.signals import LogLine, MetricSeries, Severity, Span
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = "claude-opus-4-5"
 
 # How many items to include in the prompt — keeps token count predictable
 MAX_LOG_SAMPLES = 20
@@ -203,7 +203,7 @@ class RCAAnalyzer:
             },
             json={
                 "model": MODEL,
-                "max_tokens": 1024,
+                "max_tokens": 2048,
                 "messages": [{"role": "user", "content": prompt}],
             },
         )

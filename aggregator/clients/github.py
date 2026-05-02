@@ -43,14 +43,17 @@ class GitHubLinker:
         token: str | None = None,
         repo: str | None = None,
         default_branch: str = "main",
+        path_prefix: str | None = None,
     ) -> None:
         """
         token          — GitHub personal access token (strongly recommended)
         repo           — "owner/repo" slug, e.g. "my-org/payment-service"
         default_branch — branch to link to (default: "main")
+        path_prefix    — optional prefix to prepend to extracted file paths, e.g. "demo/service-b"
         """
         self._repo = repo
         self._branch = default_branch
+        self._path_prefix = path_prefix.rstrip("/") + "/" if path_prefix else ""
         headers = {"Accept": "application/vnd.github+json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -114,14 +117,15 @@ class GitHubLinker:
             if not _has_searchable_ext(clean):
                 continue
 
-            url = _blob_url(self._repo, self._branch, clean, lineno)
+            full_path = f"{self._path_prefix}{clean}" if self._path_prefix else clean
+            url = _blob_url(self._repo, self._branch, full_path, lineno)
             refs.append(
                 CodeReference(
                     repo=self._repo,
-                    path=clean,
+                    path=full_path,
                     url=url,
                     line_number=lineno,
-                    relevance="Found in stack trace from error log",
+                    relevance=f"Line {lineno} in {clean} — referenced in error stack trace",
                 )
             )
 

@@ -66,6 +66,7 @@ class SignalAggregator:
                 token=settings.github_token,
                 repo=settings.github_repo,
                 default_branch=settings.github_default_branch,
+                path_prefix=settings.github_path_prefix,
             )
             if settings.github_repo
             else None

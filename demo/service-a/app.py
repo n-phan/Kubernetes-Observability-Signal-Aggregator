@@ -14,7 +14,13 @@ import time
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import Resource
+from prometheus_fastapi_instrumentator import Instrumentator
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("service-a")
@@ -23,17 +29,26 @@ SERVICE_B_URL          = os.getenv("SERVICE_B_URL", "http://service-b:8002")
 ENABLE_RETRY           = os.getenv("ENABLE_RETRY", "false").lower() == "true"
 ENABLE_CIRCUIT_BREAKER = os.getenv("ENABLE_CIRCUIT_BREAKER", "false").lower() == "true"
 
-MAX_RETRIES     = 3
-CB_THRESHOLD    = 5      # consecutive errors before opening the circuit
-CB_RESET_SECS   = 30    # seconds before attempting to close the circuit
+MAX_RETRIES   = 3
+CB_THRESHOLD  = 5     # consecutive errors before opening the circuit
+CB_RESET_SECS = 30   # seconds before attempting to close the circuit
 
 app = FastAPI(title="service-a", description="Upstream API")
 
-from prometheus_fastapi_instrumentator import Instrumentator
+# Prometheus metrics
 Instrumentator().instrument(app).expose(app)
 
+# OpenTelemetry — sends traces to Jaeger
+_resource = Resource.create({"service.name": "service-a"})
+_provider = TracerProvider(resource=_resource)
+_provider.add_span_processor(
+    BatchSpanProcessor(OTLPSpanExporter(endpoint="http://jaeger:4317", insecure=True))
+)
+trace.set_tracer_provider(_provider)
+FastAPIInstrumentor.instrument_app(app, tracer_provider=_provider)
+
 # --- Simple in-process circuit breaker state ---
-_cb_error_count   = 0
+_cb_error_count  = 0
 _cb_opened_at: float | None = None
 
 

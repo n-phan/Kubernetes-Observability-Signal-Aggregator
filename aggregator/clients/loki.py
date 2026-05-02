@@ -31,9 +31,8 @@ class LokiClient(BaseObservabilityClient):
 
         # Try two different label strategies; first match wins.
         selectors = [
-            f'{{namespace="{namespace}",pod=~"{target}.*"}}',
-            f'{{namespace="{namespace}",app="{target}"}}',
-            f'{{namespace="{namespace}",app=~".*{target}.*"}}',
+            f'{{job="{target}"}}',
+            f'{{service=~".*{target}.*"}}',
         ]
 
         for selector in selectors:

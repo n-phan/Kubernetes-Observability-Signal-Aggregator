@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     github_token: str | None = None
     github_repo: str | None = None          # "owner/repo"
     github_default_branch: str = "main"
+    github_path_prefix: str | None = None
 
     @field_validator("prometheus_url", "loki_url", "jaeger_url", mode="before")
     @classmethod

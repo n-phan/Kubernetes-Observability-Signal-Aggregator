@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from aggregator.config import settings
 from aggregator.core.aggregator import SignalAggregator
@@ -32,6 +32,13 @@ app = FastAPI(
     description="Unified query interface for Prometheus, Loki, and Jaeger",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # tighten this in production
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

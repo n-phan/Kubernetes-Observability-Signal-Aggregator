@@ -12,9 +12,16 @@ import logging
 import os
 import random
 import time
+import traceback
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import Resource
+from prometheus_fastapi_instrumentator import Instrumentator
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("service-b")
@@ -25,8 +32,17 @@ OOM_ENDPOINT = os.getenv("OOM_ENDPOINT", "false").lower() == "true"
 
 app = FastAPI(title="service-b", description="Flaky downstream service")
 
-from prometheus_fastapi_instrumentator import Instrumentator
+# Prometheus metrics
 Instrumentator().instrument(app).expose(app)
+
+# OpenTelemetry — sends traces to Jaeger
+_resource = Resource.create({"service.name": "service-b"})
+_provider = TracerProvider(resource=_resource)
+_provider.add_span_processor(
+    BatchSpanProcessor(OTLPSpanExporter(endpoint="http://jaeger:4317", insecure=True))
+)
+trace.set_tracer_provider(_provider)
+FastAPIInstrumentor.instrument_app(app, tracer_provider=_provider)
 
 # Simulated in-memory data store (grows without bound when OOM_ENDPOINT enabled)
 _leak_store: list[bytes] = []
@@ -67,11 +83,19 @@ def slow_query():
 
 @app.get("/crash")
 def crash():
-    """Raises an unhandled exception to populate Jaeger with error spans."""
-    logger.error(
-        "NullPointerException: payment_processor.charge() received None for amount",
-    )
-    raise RuntimeError("payment_processor.charge() received None for amount")
+    """Raises an unhandled exception with a full stack trace logged to stderr."""
+    try:
+        _process_payment(amount=None)
+    except Exception:
+        logger.error("Unhandled exception in payment processor:\n%s", traceback.format_exc())
+        raise HTTPException(status_code=500, detail="payment_processor.charge() received None for amount")
+
+
+def _process_payment(amount: float):
+    """Simulate a payment processing call that fails on None input."""
+    if amount is None:
+        raise ValueError("payment_processor.charge() received None for amount")
+    return {"status": "ok", "amount": amount}
 
 
 if OOM_ENDPOINT:
