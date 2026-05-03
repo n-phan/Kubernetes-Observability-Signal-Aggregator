@@ -19,6 +19,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.resources import Resource
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -46,6 +47,10 @@ _provider.add_span_processor(
 )
 trace.set_tracer_provider(_provider)
 FastAPIInstrumentor.instrument_app(app, tracer_provider=_provider)
+
+# Instrument httpx so outgoing calls to service-b carry trace context headers.
+# This links service-a and service-b spans into a single distributed trace.
+HTTPXClientInstrumentor().instrument()
 
 # --- Simple in-process circuit breaker state ---
 _cb_error_count  = 0

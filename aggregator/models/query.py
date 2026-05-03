@@ -65,6 +65,9 @@ class QueryRequest(BaseModel):
     include_logs: bool = True
     include_traces: bool = True
 
+    # RCA is opt-in — skipped by default to save API tokens
+    include_rca: bool = False
+
     @model_validator(mode="after")
     def validate_time_spec(self) -> "QueryRequest":
         has_lookback = self.lookback_minutes is not None

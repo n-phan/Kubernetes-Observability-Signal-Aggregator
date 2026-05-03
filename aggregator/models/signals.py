@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 # ---------------------------------------------------------------------------
@@ -37,12 +37,14 @@ class MetricSeries(BaseModel):
     labels: dict[str, str] = Field(default_factory=dict)
     samples: list[MetricSample] = Field(default_factory=list)
 
+    @computed_field
     @property
     def latest_value(self) -> float | None:
         if not self.samples:
             return None
         return max(self.samples, key=lambda s: s.timestamp).value
 
+    @computed_field
     @property
     def peak_value(self) -> float | None:
         if not self.samples:
@@ -121,13 +123,15 @@ class Span(BaseModel):
     operation_name: str
     service_name: str
     start_time: datetime
-    duration_us: int  # microseconds
+    duration_us: int  # microseconds — stored as-is, exposed as duration_ms
     tags: dict[str, str] = Field(default_factory=dict)
     is_error: bool = False
     references: list[SpanReference] = Field(default_factory=list)
 
+    @computed_field
     @property
     def duration_ms(self) -> float:
+        """Duration in milliseconds — serialized to JSON for the frontend."""
         return self.duration_us / 1000.0
 
 
@@ -136,14 +140,17 @@ class Trace(BaseModel):
 
     trace_id: str
     spans: list[Span] = Field(default_factory=list)
+    root_service: str | None = None  # set by JaegerClient from the root span
 
     @property
     def root_span(self) -> Span | None:
         roots = [s for s in self.spans if not s.references]
         return roots[0] if roots else (self.spans[0] if self.spans else None)
 
+    @computed_field
     @property
-    def total_duration_ms(self) -> float:
+    def duration_ms(self) -> float:
+        """Total wall-clock duration of the trace in milliseconds."""
         if not self.spans:
             return 0.0
         start = min(s.start_time for s in self.spans)
@@ -166,7 +173,7 @@ class TracesSignal(BaseModel):
 
     def compute_stats(self) -> None:
         self.error_trace_count = sum(1 for t in self.traces if t.has_errors)
-        durations = sorted(t.total_duration_ms for t in self.traces)
+        durations = sorted(t.duration_ms for t in self.traces)
         if durations:
             idx = max(0, int(len(durations) * 0.99) - 1)
             self.p99_duration_ms = durations[idx]

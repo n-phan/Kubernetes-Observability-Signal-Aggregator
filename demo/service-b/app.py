@@ -21,6 +21,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.trace import Status, StatusCode
 from prometheus_fastapi_instrumentator import Instrumentator
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
@@ -43,6 +44,9 @@ _provider.add_span_processor(
 )
 trace.set_tracer_provider(_provider)
 FastAPIInstrumentor.instrument_app(app, tracer_provider=_provider)
+
+# Tracer for manual spans
+_tracer = trace.get_tracer("service-b")
 
 # Simulated in-memory data store (grows without bound when OOM_ENDPOINT enabled)
 _leak_store: list[bytes] = []
@@ -93,9 +97,14 @@ def crash():
 
 def _process_payment(amount: float):
     """Simulate a payment processing call that fails on None input."""
-    if amount is None:
-        raise ValueError("payment_processor.charge() received None for amount")
-    return {"status": "ok", "amount": amount}
+    with _tracer.start_as_current_span("_process_payment") as span:
+        span.set_attribute("payment.amount", str(amount))
+        if amount is None:
+            err = ValueError("payment_processor.charge() received None for amount")
+            span.set_status(Status(StatusCode.ERROR, str(err)))
+            span.record_exception(err)
+            raise err
+        return {"status": "ok", "amount": amount}
 
 
 if OOM_ENDPOINT:

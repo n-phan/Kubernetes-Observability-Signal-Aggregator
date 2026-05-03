@@ -69,6 +69,8 @@ class JaegerClient(BaseObservabilityClient):
         traces: list[Trace] = []
         for raw_trace in data.get("data", []):
             trace_id = raw_trace.get("traceID", "")
+
+            # Build process_id -> service_name mapping from the processes block
             processes: dict[str, str] = {
                 pid: p.get("serviceName", "unknown")
                 for pid, p in raw_trace.get("processes", {}).items()
@@ -79,12 +81,25 @@ class JaegerClient(BaseObservabilityClient):
                 process_id = raw_span.get("processID", "")
                 service_name = processes.get(process_id, "unknown")
 
+                # Tags come as [{key, type, value}] — flatten to a dict
                 tags = {
-                    t["key"]: str(t["value"])
+                    t["key"]: t["value"]
                     for t in raw_span.get("tags", [])
                     if "key" in t and "value" in t
                 }
-                is_error = tags.get("error", "false").lower() in ("true", "1")
+
+                # Detect errors via multiple OTel/Jaeger conventions:
+                # 1. error=true (legacy Jaeger)
+                # 2. otel.status_code=ERROR (OpenTelemetry)
+                # 3. http.status_code >= 500
+                raw_error = tags.get("error", False)
+                otel_status = str(tags.get("otel.status_code", "")).upper()
+                http_status = int(tags.get("http.status_code", 0))
+                is_error = (
+                    str(raw_error).lower() in ("true", "1")
+                    or otel_status == "ERROR"
+                    or http_status >= 500
+                )
 
                 refs = [
                     SpanReference(
@@ -95,7 +110,10 @@ class JaegerClient(BaseObservabilityClient):
                     for r in raw_span.get("references", [])
                 ]
 
+                # duration in Jaeger API is microseconds
+                duration_us = raw_span.get("duration", 0)
                 start_time_us = raw_span.get("startTime", 0)
+
                 spans.append(
                     Span(
                         trace_id=trace_id,
@@ -103,15 +121,26 @@ class JaegerClient(BaseObservabilityClient):
                         operation_name=raw_span.get("operationName", ""),
                         service_name=service_name,
                         start_time=datetime.fromtimestamp(start_time_us / 1e6),
-                        duration_us=raw_span.get("duration", 0),
-                        tags=tags,
+                        duration_us=duration_us,
+                        tags={k: str(v) for k, v in tags.items()},
                         is_error=is_error,
                         references=refs,
                     )
                 )
 
             if spans:
-                traces.append(Trace(trace_id=trace_id, spans=spans))
+                # Root span = the span with no parent references
+                root_span = next(
+                    (s for s in spans if not s.references),
+                    spans[0],
+                )
+                traces.append(
+                    Trace(
+                        trace_id=trace_id,
+                        spans=spans,
+                        root_service=root_span.service_name,
+                    )
+                )
 
         return traces, duration_ms
 

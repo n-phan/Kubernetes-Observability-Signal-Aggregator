@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # Aggregator behaviour
     default_lookback_minutes: int = 30
     max_log_lines: int = 500
-    max_traces: int = 50
+    max_traces: int = 200
 
     # API server
     api_host: str = "0.0.0.0"
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     github_token: str | None = None
     github_repo: str | None = None          # "owner/repo"
     github_default_branch: str = "main"
-    github_path_prefix: str | None = None
+    github_path_prefix: str = "demo/service-b"
 
     @field_validator("prometheus_url", "loki_url", "jaeger_url", mode="before")
     @classmethod

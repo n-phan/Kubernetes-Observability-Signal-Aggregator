@@ -85,11 +85,12 @@ class SignalAggregator:
         t0 = time.monotonic()
 
         logger.info(
-            "Querying target=%s namespace=%s window=[%s → %s]",
+            "Querying target=%s namespace=%s window=[%s → %s] rca=%s",
             request.target,
             request.namespace,
             window.start.isoformat(),
             window.end.isoformat(),
+            request.include_rca,
         )
 
         # Fan out all three queries concurrently
@@ -130,8 +131,8 @@ class SignalAggregator:
             correlations=correlations,
         )
 
-        # RCA — runs only when there are error signals
-        if self._rca_analyzer:
+        # RCA — only runs when explicitly requested and error signals exist
+        if request.include_rca and self._rca_analyzer:
             rca = await self._rca_analyzer.analyze(result)
             if self._github_linker and rca.performed:
                 rca = await self._github_linker.enrich(rca, logs)
