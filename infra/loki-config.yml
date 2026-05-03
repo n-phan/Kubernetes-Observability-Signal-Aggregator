@@ -8,6 +8,8 @@
 auth_enabled: false
 
 ingester:
+  wal:
+    dir: /loki/wal
   chunk_idle_period: 3m
   max_chunk_age: 1h
   lifecycler:
@@ -24,7 +26,7 @@ limits_config:
 schema_config:
   configs:
     - from: 2020-10-24
-      store: boltdb-shipper
+      store: boltdb
       object_store: filesystem
       schema: v11
       index:
@@ -32,9 +34,8 @@ schema_config:
         period: 24h
 
 storage_config:
-  boltdb_shipper:
-    active_index_directory: /loki/boltdb-shipper-active
-    shared_store: filesystem
+  boltdb:
+    directory: /loki/boltdb
   filesystem:
     directory: /loki/chunks
 
