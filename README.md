@@ -131,7 +131,15 @@ obs query service-a --json | jq '.rca'
 obs query service-a --json | jq '.correlations'
 ```
 
-### 4. REST API
+### 4. Frontend Web UI
+
+Open http://localhost:8081 in your browser and use the dashboard to query the aggregator.
+The UI handles all the state management — pagination, filtering, RCA triggering — and
+renders results as you type.
+
+### 5. REST API (optional)
+
+For scripting or integration with other tools, the REST API is also available:
 
 ```bash
 # Start the dev server (not needed if using docker compose)
@@ -146,13 +154,58 @@ curl -s -X POST http://localhost:8080/query \
 
 ---
 
+## Frontend Dashboard
+
+The web UI is the recommended way to explore results. It's a single-page app served by
+nginx on **http://localhost:8081** and communicates with the aggregator API on port 8080.
+
+### Features
+
+- **Live query builder** — pick a service, namespace, and time window
+- **Structured result panels** — metrics table, paginated logs with search & filtering,
+  paginated traces with error highlighting, and RCA summary
+- **RCA integration** — click "Analyze with AI" to run the LLM on demand (or use mock data)
+- **Pagination & filtering** — navigate large result sets with prev/next buttons, search
+  logs, toggle errors-only mode, jump to specific log lines or pages
+- **Mock data** — click the "⊡ Mock" button to load a pre-built demo scenario without
+  hitting the API
+- **Status indicator** — coloured dot in the header shows query state: idle (grey), loading
+  (amber pulse), ok (green), error (red), or mock (amber solid)
+
+### Architecture
+
+The frontend is split into focused modules (no build step or bundler needed):
+
+```
+frontend/
+├── index.html                Shell — semantic HTML + script tags only
+├── css/
+│   └── styles.css           Dark terminal aesthetic (IBM Plex Mono, ~720 lines)
+└── js/
+    ├── config.js            Page size constants + MOCK_DATA (~160 lines)
+    ├── utils.js             Helpers: $, fmt, fmtTime, escHtml, collapsible (~67 lines)
+    ├── render.js            Panel builders: renderMeta, renderRCA, renderMetrics,
+    │                        renderLogs, renderTraces (~352 lines)
+    ├── filters.js           Filter/pagination state + all navigation functions
+    │                        (logPagePrev, logJumpToLine, etc.) (~198 lines)
+    └── api.js               runQuery, runAnalyze, runMock, renderResult,
+                             event listeners (~181 lines)
+```
+
+**Load order matters:** config → utils → render → filters → api. Each module has
+one responsibility, so features are easy to locate. The total minified size is ~1.7 KB
+JavaScript + ~0.7 KB CSS, enabling fast page loads even on slow connections.
+
+---
+
 ## Ports
 
 | Service | URL | Notes |
 |---|---|---|
+| **Frontend** | **http://localhost:8081** | **Web UI — start here** |
 | service-a | http://localhost:8001 | Upstream API — main entry point for demo |
 | service-b | http://localhost:8002 | Flaky downstream — toggle failure modes here |
-| Aggregator API | http://localhost:8080 | Query endpoint |
+| Aggregator API | http://localhost:8080 | Query endpoint (JSON REST) |
 | Aggregator docs | http://localhost:8080/docs | Auto-generated OpenAPI UI |
 | Prometheus | http://localhost:9090 | Metrics query explorer |
 | Loki | http://localhost:3100 | Log store (no UI — query via aggregator) |
