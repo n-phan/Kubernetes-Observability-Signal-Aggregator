@@ -77,7 +77,7 @@ class GitHubLinker:
         # Strategy 1: direct stack frame links (no API call needed)
         stack_refs = self._link_stack_frames(logs)
         refs.extend(stack_refs)
-        logger.debug("Stack frame linking: %d refs", len(stack_refs))
+        logger.info("GitHub linker — stack frame refs: %d", len(stack_refs))
 
         # Strategy 2: GitHub code search for LLM-provided terms
         if rca.github_search_terms:
@@ -156,6 +156,7 @@ class GitHubLinker:
             except Exception as exc:
                 logger.warning("GitHub search error for '%s': %s", term, exc)
 
+        logger.info("GitHub linker — code search refs: %d", len(refs))
         return refs
 
     async def _search_one(self, term: str) -> list[CodeReference]:
@@ -167,9 +168,11 @@ class GitHubLinker:
         )
         resp.raise_for_status()
         data = resp.json()
+        items = data.get("items", [])
+        logger.info("GitHub search '%s': %d item(s)", term, len(items))
 
         refs: list[CodeReference] = []
-        for item in data.get("items", []):
+        for item in items:
             path: str = item.get("path", "")
             if not _has_searchable_ext(path):
                 continue

@@ -11,8 +11,14 @@
 #
 # ── How to run a demo scenario ────────────────────────────────────────────────
 #
-#   Recommended: use the demo scripts in demo/ (coming soon). They handle
-#   traffic generation and env var toggling for you.
+#   Recommended: use the demo scripts in demo/. They handle traffic
+#   generation and env var toggling for you:
+#
+#     bash demo/scenario_errors.sh   # Scenario A — 70% error rate
+#     bash demo/scenario_slow.sh     # Scenario B — 2 s added latency
+#     bash demo/scenario_crash.sh    # Scenario C — payment processor crash
+#
+#   Run each script from the project root directory.
 #
 #   Manual (no scripts needed):
 #     1. Edit the environment variables under service-b or service-a below
@@ -26,7 +32,7 @@
 # ── Demo scenarios ────────────────────────────────────────────────────────────
 #
 #   Scenario A — Random 500 errors (tests basic RCA):
-#     FAILURE_RATE: "0.5"   # half of /data requests will fail
+#     FAILURE_RATE: "0.0"   # half of /data requests will fail
 #     then: for i in $(seq 1 30); do curl -s http://localhost:8001/api/data; done
 #
 #   Scenario B — Latency spike (tests slow-query detection):
@@ -42,7 +48,7 @@
 #     then: for i in $(seq 1 20); do curl -s http://localhost:8002/oom; done
 #
 #   Scenario E — Resilience comparison (shows retry/circuit breaker effect):
-#     Set FAILURE_RATE: "0.8" on service-b, then compare:
+#     Set FAILURE_RATE: "0.0" on service-b, then compare:
 #       - ENABLE_RETRY: "false", ENABLE_CIRCUIT_BREAKER: "false"  (errors cascade)
 #       - ENABLE_RETRY: "true"                                    (some errors absorbed)
 #       - ENABLE_CIRCUIT_BREAKER: "true"                         (circuit opens after 5 errors)
@@ -152,19 +158,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-  # Promtail — log shipper. Watches all Docker container logs via the Docker
-  # socket and forwards them to Loki with job/service labels so they can be
-  # queried by service name. Without this, Loki receives nothing.
-  promtail:
-    image: grafana/promtail:2.9.6
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./infra/promtail-config.yml:/etc/promtail/config.yml:ro
-    command: -config.file=/etc/promtail/config.yml
-    depends_on:
-      loki:
-        condition: service_healthy
 
   jaeger:
     image: jaegertracing/all-in-one:1.56

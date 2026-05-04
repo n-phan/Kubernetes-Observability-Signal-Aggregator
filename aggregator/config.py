@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     github_default_branch: str = "main"
     github_path_prefix: str = "demo/service-b"
 
+    # Demo runner — URLs for the in-browser scenario execution feature
+    # These must be reachable from inside the aggregator container.
+    demo_service_b_url: str = "http://service-b:8002"
+    demo_service_a_url: str = "http://service-a:8001"
+
     @field_validator("prometheus_url", "loki_url", "jaeger_url", mode="before")
     @classmethod
     def strip_trailing_slash(cls, v: str) -> str:

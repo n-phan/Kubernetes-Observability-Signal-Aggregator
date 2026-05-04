@@ -223,7 +223,7 @@ class TestScenario1_ConnectionPoolExhaustion:
 
         linker = GitHubLinker(token="test", repo=REPO, default_branch=BRANCH)
         rca = RCAResult(performed=True, github_search_terms=["acquire"])
-        enriched = await linker._link_stack_frames.__func__(linker, result.logs)
+        enriched = linker._link_stack_frames(result.logs)
 
         assert any("pool.py" in ref.path for ref in enriched)
         url = [r.url for r in enriched if "pool.py" in r.path][0]

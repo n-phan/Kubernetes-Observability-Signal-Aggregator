@@ -70,7 +70,10 @@ async function runQuery() {
 // Re-runs the last query with include_rca: true. Called from the placeholder
 // panel button that appears after a normal query.
 async function runAnalyze() {
-  if (!_lastQuery) return;
+  if (!_lastQuery) {
+    alert('Run a Query first so the analyzer knows which service and time window to investigate.');
+    return;
+  }
   const { target, namespace, lookback, endpoint } = _lastQuery;
 
   const btn = $('btn-analyze');
@@ -95,6 +98,13 @@ async function runAnalyze() {
     }
 
     const data = await resp.json();
+
+    // Surface RCA errors to the console so they're easy to inspect.
+    // The RcaPanel._buildFailed() view handles displaying them to the user.
+    if (data.rca?.error) {
+      console.error('[RCA] analysis failed:', data.rca.error);
+    }
+
     setStatus('ok');
     renderResult(data, true);
 
@@ -122,55 +132,31 @@ function runMock() {
 }
 
 // ── Render full result ────────────────────────────────────────────────────────
-// Builds and appends all result panels to <main> in a fixed display order.
-// Each panel function returns null when there is no data to show, and those
-// are filtered out before rendering so empty sections are never displayed.
+// Instantiates the component for each panel and appends them to <main>.
+// Each component's static factory method returns null when there is no data
+// to show, so empty sections are never displayed.
 function renderResult(data, showRca = true) {
   const main = $('main');
   main.innerHTML = '';
 
-  // RCA section: full analysis, placeholder with button, or nothing
-  let rcaSection = null;
-  if (showRca && data.rca && data.rca.performed) {
-    rcaSection = renderRCA(data.rca);
-  } else {
-    const hasErrors = (data.correlations || [])
-      .some(c => c.severity === 'error' || c.severity === 'warn');
+  // Determine whether error signals are present (used by the RCA placeholder).
+  const hasErrors = (data.correlations || [])
+    .some(c => c.severity === 'error' || c.severity === 'warn');
 
-    const panel = document.createElement('div');
-    panel.className = 'panel animate-in';
-    panel.innerHTML = `
-      <div class="panel-header">
-        <span class="panel-title" style="color:var(--text-muted)">Root Cause Analysis</span>
-        <span class="panel-count">not yet performed ▾</span>
-      </div>
-      <div class="panel-body">
-        <div class="rca-placeholder">
-          ${hasErrors
-            ? 'Error signals detected. Run AI analysis to get root cause, recommended actions, and code references.'
-            : 'No error signals detected in this time window. Run analysis anyway to confirm.'}
-          <br/>
-          <button class="btn-analyze" id="btn-analyze" onclick="runAnalyze()">
-            ⚡ Analyze with AI
-          </button>
-        </div>
-      </div>
-    `;
-    rcaSection = panel;
-  }
+  // Build all panels. Each is either a component instance (with .element)
+  // or null (no data to show).
+  const panels = [
+    new MetaBar(data),
+    new RcaPanel({ rca: data.rca, showRca, hasErrors }),
+    CorrelationsPanel.create(data.correlations),
+    MetricsPanel.create(data.metrics),
+    LogsPanel.create(data.logs),
+    TracesPanel.create(data.traces),
+  ].filter(Boolean);  // remove nulls
 
-  const sections = [
-    renderMeta(data),
-    rcaSection,
-    renderCorrelations(data.correlations),
-    renderMetrics(data.metrics),
-    renderLogs(data.logs),
-    renderTraces(data.traces),
-  ].filter(Boolean);
-
-  sections.forEach((el, i) => {
-    el.style.animationDelay = `${i * 60}ms`;
-    main.appendChild(el);
+  panels.forEach((panel, i) => {
+    panel.element.style.animationDelay = `${i * 60}ms`;
+    main.appendChild(panel.element);
   });
 }
 

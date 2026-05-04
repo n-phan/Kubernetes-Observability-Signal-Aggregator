@@ -55,7 +55,8 @@
                 <input id="inp-endpoint" type="text" value="http://localhost:8080" />
             </div>
             <button class="btn-query" id="btn-query" onclick="runQuery()">▶ Query</button>
-            <button class="btn-mock" id="btn-mock" onclick="runMock()">⊡ Mock</button>
+            <button class="btn-mock"  id="btn-mock"  onclick="runMock()">⊡ Mock</button>
+            <button class="btn-mock"  id="btn-demo"  onclick="DemoPanel.toggle()">⚙ Demo</button>
             <div class="status-dot" id="status-dot"></div>
         </div>
     </header>
@@ -69,17 +70,36 @@
 
     <!--
   Script load order matters — each file depends on the ones above it:
-    config.js  → constants (PAGE_SIZE) and MOCK_DATA
-    utils.js   → shared helpers ($, fmt, escHtml, collapsible, …)
-    render.js  → panel builders (uses utils + filter state from filters.js)
-    filters.js → filter/pagination state and functions (uses utils + render)
-    api.js     → fetch calls and result orchestration (uses all of the above)
+
+    config.js                → constants (PAGE_SIZE) and MOCK_DATA
+    utils.js                 → shared helpers ($, fmt, escHtml, collapsible, …)
+
+    components/MetaBar.js        → summary row at the top of each result
+    components/RcaPanel.js       → AI root cause analysis (or placeholder)
+    components/CorrelationsPanel.js → cross-signal correlation events
+    components/MetricsPanel.js   → Prometheus metric series table
+    components/LogsPanel.js      → paginated, filterable Loki log lines
+    components/TracesPanel.js    → paginated, filterable Jaeger traces
+
+    api.js                   → fetch calls, instantiates the components above
 -->
     <script src="js/config.js"></script>
     <script src="js/utils.js"></script>
-    <script src="js/render.js"></script>
-    <script src="js/filters.js"></script>
+
+    <script src="js/components/MetaBar.js"></script>
+    <script src="js/components/RcaPanel.js"></script>
+    <script src="js/components/CorrelationsPanel.js"></script>
+    <script src="js/components/MetricsPanel.js"></script>
+    <script src="js/components/LogsPanel.js"></script>
+    <script src="js/components/TracesPanel.js"></script>
+    <script src="js/components/DemoPanel.js"></script>
+
     <script src="js/api.js"></script>
+
+    <script>
+      // Initialise the Demo panel after all components and api.js are loaded.
+      DemoPanel.init();
+    </script>
 
 </body>
 

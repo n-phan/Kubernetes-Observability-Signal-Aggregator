@@ -15,6 +15,7 @@ import time
 import traceback
 
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -55,6 +56,55 @@ _leak_store: list[bytes] = []
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "service-b"}
+
+
+# ── Runtime configuration ──────────────────────────────────────────────────
+# These endpoints allow the aggregator's demo runner to change failure modes
+# without restarting the container. Changes are in-memory only — they reset
+# if service-b restarts.
+
+
+class ConfigureRequest(BaseModel):
+    failure_rate: float | None = None
+    latency_ms: int | None = None
+
+
+@app.get("/config")
+def get_config():
+    """Return the current active failure injection settings."""
+    return {
+        "failure_rate": FAILURE_RATE,
+        "latency_ms": LATENCY_MS,
+        "oom_endpoint": OOM_ENDPOINT,
+    }
+
+
+@app.post("/configure")
+def configure(req: ConfigureRequest):
+    """
+    Update failure injection settings at runtime.
+    Only the fields provided are changed; omitted fields keep their current values.
+    """
+    global FAILURE_RATE, LATENCY_MS
+    if req.failure_rate is not None:
+        FAILURE_RATE = max(0.0, min(1.0, req.failure_rate))
+    if req.latency_ms is not None:
+        LATENCY_MS = max(0, req.latency_ms)
+    logger.info(
+        "Runtime config updated: FAILURE_RATE=%.2f LATENCY_MS=%d",
+        FAILURE_RATE, LATENCY_MS,
+    )
+    return {"failure_rate": FAILURE_RATE, "latency_ms": LATENCY_MS}
+
+
+@app.post("/reset")
+def reset_config():
+    """Restore failure injection settings to their startup defaults (no failures)."""
+    global FAILURE_RATE, LATENCY_MS
+    FAILURE_RATE = 0.0
+    LATENCY_MS = 0
+    logger.info("Runtime config reset to defaults")
+    return {"failure_rate": FAILURE_RATE, "latency_ms": LATENCY_MS}
 
 
 @app.get("/data")

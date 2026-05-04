@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from aggregator.config import settings
 from aggregator.core.aggregator import SignalAggregator
+from aggregator.demo import router as demo_router
 from aggregator.models.query import QueryRequest
 from aggregator.models.result import UnifiedResult
 
@@ -40,6 +41,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(demo_router)
 
 
 @app.get("/health")

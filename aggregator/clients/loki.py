@@ -67,11 +67,17 @@ def _is_error_initiator(line: LogLine) -> bool:
 
 def _group_multiline(lines: list[LogLine]) -> list[LogLine]:
     """
-    Merge consecutive traceback lines into the preceding ERROR log entry.
+    Merge consecutive traceback lines into the preceding ERROR or CRITICAL entry.
 
-    Loki ships each line of traceback.format_exc() as a separate entry.
-    This re-joins them into one LogLine so the frontend and RCA analyzer
-    both see the full traceback as a unit.
+    When Python logs an exception with traceback.format_exc(), each line of
+    the traceback arrives in Loki as a separate log entry. This function walks
+    the sorted list and appends those continuation lines (indented code lines,
+    "File …" references, exception type lines, etc.) onto the message of the
+    error entry that triggered them, as long as they arrive within 1 second
+    of the initiating entry.
+
+    The result is one LogLine per exception that contains the full traceback,
+    which is much easier for both the frontend and the RCA analyzer to read.
     """
     if not lines:
         return lines
@@ -126,9 +132,18 @@ class LokiClient(BaseObservabilityClient):
         limit: int | None = None,
     ) -> LogsSignal:
         """
-        Query Loki for log streams matching the target pod/service.
+        Query Loki for log lines matching the target service name.
 
-        Tries a pod-level selector first; falls back to app-label selector.
+        Tries two label selectors in order:
+          1. {job="<target>"}          — matches Promtail's job label exactly
+          2. {service=~".*<target>.*"} — broader regex match on the service label
+
+        The first selector that returns at least one line wins; the rest are
+        skipped. If both fail, an empty LogsSignal is returned so callers never
+        have to handle None.
+
+        Returned lines are sorted chronologically and multiline tracebacks are
+        merged into single entries (see _group_multiline).
         """
         limit = limit or settings.max_log_lines
 
