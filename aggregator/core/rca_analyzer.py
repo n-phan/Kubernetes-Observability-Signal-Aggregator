@@ -25,7 +25,7 @@ from aggregator.models.signals import LogLine, MetricSeries, Severity, Span
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-3-5-sonnet-20241022"
+MODEL = "claude-sonnet-4-6"
 
 # How many items to include in the prompt — keeps token count predictable
 MAX_LOG_SAMPLES = 20
