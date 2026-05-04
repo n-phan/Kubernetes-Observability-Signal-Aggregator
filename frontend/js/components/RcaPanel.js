@@ -42,27 +42,19 @@ class RcaPanel {
       .map(e => `<li>${e}</li>`)
       .join('');
 
-    const codeRefsHtml = (rca.code_references || []).map(r => `
+    const codeRefsHtml = (rca.code_references || []).map(r => {
+      const base = r.url || '';
+      const href = base + (r.line_number && base && !base.includes('#') ? '#L' + r.line_number : '');
+      return `
       <div class="code-ref">
         <span class="code-ref-icon">⌥</span>
         <div class="code-ref-info">
           <div class="code-ref-path">${r.path}${r.line_number ? '#L' + r.line_number : ''}</div>
           <div class="code-ref-relevance">${r.relevance || ''}</div>
         </div>
-        ${r.url
-          ? `<a class="code-ref-link" href="${r.url}" target="_blank" rel="noopener">↗ GitHub</a>`
-          : ''}
+        ${href ? `<a class="code-ref-link" href="${href}">↗ GitHub</a>` : ''}
       </div>
-    `).join('');
-
-    const noRefsMessage = !codeRefsHtml ? `
-      <div style="font-size:11px;color:var(--text-dim);font-family:'IBM Plex Mono',monospace;padding:4px 0">
-        No matches found. Code references are extracted from Python tracebacks in logs —
-        they appear when a scenario produces a stack trace with
-        <code style="font-size:10px">File "..."</code> lines
-        (e.g. the Payment crash scenario).
-      </div>
-    ` : '';
+    `}).join('');
 
     const body = `
       <div class="rca-summary">${rca.summary}</div>
@@ -84,10 +76,10 @@ class RcaPanel {
           <div class="rca-subsection-title">Recommended actions</div>
           <div class="actions-list">${actionsHtml}</div>
         </div>` : ''}
-      ${codeRefsHtml || noRefsMessage ? `
+      ${codeRefsHtml ? `
         <div class="rca-subsection">
           <div class="rca-subsection-title">Code references</div>
-          <div class="code-refs">${codeRefsHtml || noRefsMessage}</div>
+          <div class="code-refs">${codeRefsHtml}</div>
         </div>` : ''}
     `;
 
@@ -97,7 +89,8 @@ class RcaPanel {
       <span class="panel-count">▾</span>
     `;
 
-    return collapsible(header, body);
+    const el = collapsible(header, body);
+    return el;
   }
 
   // ── Placeholder view (RCA not yet run) ────────────────────────────────────
