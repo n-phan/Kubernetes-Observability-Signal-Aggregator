@@ -32,14 +32,14 @@ class RcaPanel {
       <div class="action-row p${a.priority}">
         <span class="action-priority">P${a.priority}</span>
         <div class="action-content">
-          <div class="action-text">${a.action}</div>
-          <div class="action-rationale">${a.rationale}</div>
+          <div class="action-text">${escHtml(a.action)}</div>
+          <div class="action-rationale">${escHtml(a.rationale)}</div>
         </div>
       </div>
     `).join('');
 
     const evidenceHtml = (rca.supporting_evidence || [])
-      .map(e => `<li>${e}</li>`)
+      .map(e => `<li>${escHtml(e)}</li>`)
       .join('');
 
     const codeRefsHtml = (rca.code_references || []).map(r => {
@@ -49,16 +49,16 @@ class RcaPanel {
       <div class="code-ref">
         <span class="code-ref-icon">⌥</span>
         <div class="code-ref-info">
-          <div class="code-ref-path">${r.path}${r.line_number ? '#L' + r.line_number : ''}</div>
-          <div class="code-ref-relevance">${r.relevance || ''}</div>
+          <div class="code-ref-path">${escHtml(r.path)}${r.line_number ? '#L' + r.line_number : ''}</div>
+          <div class="code-ref-relevance">${escHtml(r.relevance || '')}</div>
         </div>
         ${href ? `<a class="code-ref-link" href="${href}">↗ GitHub</a>` : ''}
       </div>
     `}).join('');
 
     const body = `
-      <div class="rca-summary">${rca.summary}</div>
-      <div class="rca-root-cause">${rca.root_cause}</div>
+      <div class="rca-summary">${escHtml(rca.summary)}</div>
+      <div class="rca-root-cause">${escHtml(rca.root_cause)}</div>
       <div class="confidence-row">
         <span class="confidence-label">Confidence</span>
         <div class="confidence-bar">

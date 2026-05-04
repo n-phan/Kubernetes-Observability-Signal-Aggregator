@@ -38,7 +38,12 @@ if [ -f docker-compose.yml.bak ]; then
     mv docker-compose.yml.bak docker-compose.yml
     echo "    ✓ Restored"
 else
-    # No backup, so check if FAILURE_RATE is non-default and fix it
+    # No backup, so check if FAILURE_RATE is non-default and fix it.
+    # NOTE: This sed path is a last-resort fallback. In normal demo use, failure
+    # injection is applied via the /configure API endpoint (not by editing this
+    # file), so this block rarely executes. The pattern only handles values of
+    # the form "0.X" — values >= 1.0 would be missed. If you manually edit
+    # FAILURE_RATE to a value outside that range, restore it by hand.
     if grep -q 'FAILURE_RATE: "0\.[1-9]' docker-compose.yml; then
         echo "    Found non-default FAILURE_RATE — resetting to 0.0"
         sed -i.tmp 's/FAILURE_RATE: "0\.[0-9]*"/FAILURE_RATE: "0.0"/' docker-compose.yml

@@ -13,6 +13,7 @@ JSON response to the frontend.
 aggregator/
 ├── main.py               FastAPI app — HTTP entry point and route definitions
 ├── config.py             Settings loader — reads from .env and environment variables
+├── cli.py                Typer CLI — runs the aggregator pipeline from the terminal
 ├── demo.py               Demo runner — SSE streaming endpoint for the in-browser demo panel
 │
 ├── core/
@@ -215,8 +216,12 @@ Two post-processing steps run on every result:
 ### `clients/jaeger.py` — Traces client
 
 Queries Jaeger's HTTP API for traces involving the target service within the time window.
-Assembles `Trace` and `Span` objects, identifies error spans via tags (`error=true`),
-and computes p99 latency across all traces.
+Assembles `Trace` and `Span` objects and computes p99 latency across all traces.
+
+A span is flagged as an error if any of the following tags are present:
+- `error=true` — legacy Jaeger convention
+- `otel.status_code=ERROR` — OpenTelemetry status convention
+- `http.status_code >= 500` — HTTP-level error code
 
 ---
 
@@ -251,6 +256,35 @@ All data flowing through the system is typed with Pydantic models:
   `RecommendedAction` (one prioritized action item)
 - **`query.py`** — `QueryRequest` (the POST body), including flags for `include_rca`,
   `include_metrics`, `include_logs`, `include_traces`
+
+---
+
+### `cli.py` — Command-line interface
+
+A [Typer](https://typer.tiangolo.com/) app that exposes the aggregator as a terminal
+command for use outside Docker. Useful during development to query a live stack without
+opening the browser.
+
+**Commands:**
+
+```bash
+# Query a service and display rich terminal output
+obs query service-b --namespace default --lookback 60
+
+# Restrict to specific backends
+obs query service-b --no-traces --json
+
+# Use an explicit time range instead of a lookback window
+obs query service-b --start 2024-01-01T10:00:00 --end 2024-01-01T11:00:00
+
+# Print version and configured backend URLs
+obs version
+```
+
+The `query` command runs through the full `SignalAggregator` pipeline — the same code
+path as `POST /query` — and renders output with `RichFormatter` (tables and panels) or
+`JsonFormatter` (raw JSON with `--json`). RCA is not included by default; it must be
+triggered from the web UI.
 
 ---
 

@@ -25,7 +25,7 @@ from aggregator.models.signals import LogsSignal, MetricsSignal, TracesSignal
 logger = logging.getLogger(__name__)
 
 
-async def _skipped(signal):
+async def _skipped(signal: MetricsSignal | LogsSignal | TracesSignal) -> MetricsSignal | LogsSignal | TracesSignal:
     """Return a default signal when a backend is disabled via --no-* flag."""
     return signal
 

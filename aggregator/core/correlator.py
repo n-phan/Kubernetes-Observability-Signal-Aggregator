@@ -136,7 +136,7 @@ class Correlator:
         ratio = logs.error_count / logs.total_lines
         if ratio > ERROR_LOG_RATIO_THRESHOLD:
             # Find the most recent error message as a sample
-            error_lines = [l for l in logs.lines if l.severity in (Severity.ERROR, Severity.CRITICAL)]
+            error_lines = [line for line in logs.lines if line.severity in (Severity.ERROR, Severity.CRITICAL)]
             sample = error_lines[-1].message[:120] if error_lines else None
 
             events.append(

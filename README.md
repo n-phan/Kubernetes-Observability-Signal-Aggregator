@@ -174,8 +174,9 @@ pytest -v
 pytest -x
 ```
 
-`tests/test_aggregator.py` covers the correlator rules and the aggregator's fan-out
-behavior. `tests/test_rca_scenarios.py` covers the full RCA pipeline across four failure
+`tests/test_aggregator.py` covers the correlator rules, the aggregator's fan-out
+behavior, `TimeWindow` validation, and the Loki multiline-merging and severity-detection
+helpers. `tests/test_rca_scenarios.py` covers the full RCA pipeline across four failure
 scenarios using mocked Anthropic responses.
 
 ---

@@ -156,8 +156,8 @@ class RCAAnalyzer:
         # Error and warning log samples — both levels matter:
         # ERROR/CRITICAL contain the root failure; WARNING often captures downstream impact
         error_lines = [
-            l for l in result.logs.lines
-            if l.severity in (Severity.ERROR, Severity.CRITICAL, Severity.WARN)
+            log for log in result.logs.lines
+            if log.severity in (Severity.ERROR, Severity.CRITICAL, Severity.WARN)
         ]
         if error_lines:
             lines.append(f"## Error and warning log samples ({len(error_lines)} total)")

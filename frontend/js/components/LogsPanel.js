@@ -69,29 +69,6 @@ class LogsPanel {
       </div>
     `;
 
-    // Cache element references so event handlers can reach them without
-    // using global IDs (which would break if two panels existed at once).
-    this._els = {
-      errBtn:    wrapper.querySelector('#log-errors-btn'),
-      searchInp: wrapper.querySelector('.log-filters .filter-input'),
-      rowsCont:  wrapper.querySelector('#log-rows-container'),
-      pageInput: wrapper.querySelector('#log-page-input'),
-      pageTotal: wrapper.querySelector('#log-page-total'),
-      prevBtn:   wrapper.querySelector('#log-prev-btn'),
-      nextBtn:   wrapper.querySelector('#log-next-btn'),
-      lineInput: wrapper.querySelector('#log-line-input'),
-    };
-
-    // Attach event handlers
-    this._els.errBtn.addEventListener('click', () => this._toggleErrorFilter());
-    this._els.searchInp.addEventListener('input', e => this._updateSearch(e.target.value));
-    this._els.prevBtn.addEventListener('click', () => this._goToPage(this._page - 1));
-    this._els.nextBtn.addEventListener('click', () => this._goToPage(this._page + 1));
-    this._els.pageInput.addEventListener('change', e => this._goToPage(parseInt(e.target.value) - 1));
-    this._els.pageInput.addEventListener('keydown', e => { if (e.key === 'Enter') this._goToPage(parseInt(e.target.value) - 1); });
-    this._els.lineInput.addEventListener('change', e => this._jumpToLine(parseInt(e.target.value)));
-    this._els.lineInput.addEventListener('keydown', e => { if (e.key === 'Enter') this._jumpToLine(parseInt(e.target.value)); });
-
     const body = wrapper.innerHTML;
     const headerHtml = `
       <span class="panel-title">Logs</span>
@@ -100,16 +77,18 @@ class LogsPanel {
 
     const panel = collapsible(headerHtml, body);
 
-    // Re-acquire references now that collapsible() has wrapped the content
-    this._els.headerCount = panel.querySelector('#log-header-count');
-    this._els.errBtn      = panel.querySelector('#log-errors-btn');
-    this._els.searchInp   = panel.querySelector('.log-filters .filter-input');
-    this._els.rowsCont    = panel.querySelector('#log-rows-container');
-    this._els.pageInput   = panel.querySelector('#log-page-input');
-    this._els.pageTotal   = panel.querySelector('#log-page-total');
-    this._els.prevBtn     = panel.querySelector('#log-prev-btn');
-    this._els.nextBtn     = panel.querySelector('#log-next-btn');
-    this._els.lineInput   = panel.querySelector('#log-line-input');
+    // Acquire element references from the final panel DOM
+    this._els = {
+      headerCount: panel.querySelector('#log-header-count'),
+      errBtn:      panel.querySelector('#log-errors-btn'),
+      searchInp:   panel.querySelector('.log-filters .filter-input'),
+      rowsCont:    panel.querySelector('#log-rows-container'),
+      pageInput:   panel.querySelector('#log-page-input'),
+      pageTotal:   panel.querySelector('#log-page-total'),
+      prevBtn:     panel.querySelector('#log-prev-btn'),
+      nextBtn:     panel.querySelector('#log-next-btn'),
+      lineInput:   panel.querySelector('#log-line-input'),
+    };
 
     // Re-attach handlers to the final elements
     this._els.errBtn.addEventListener('click', () => this._toggleErrorFilter());

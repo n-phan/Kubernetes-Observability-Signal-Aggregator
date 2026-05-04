@@ -91,7 +91,12 @@ The demo services expose Prometheus-compatible metrics automatically via
 `prometheus-fastapi-instrumentator`. This includes:
 - `http_requests_total` — request count by method, status, and path
 - `http_request_duration_seconds` — latency histogram
-- `http_error_rate` — derived error ratio
+
+`http_error_rate` is not a raw metric from the services. It is the name the aggregator
+assigns to the result of its PromQL expression
+`rate(http_requests_total{status=~"5.."}[5m])`, which filters `http_requests_total` for
+5xx responses. This distinction matters if you are querying Prometheus directly — you
+will not find an `http_error_rate` metric there.
 
 **How the aggregator queries it:** The Prometheus client uses the `query_range` HTTP API
 to fetch metric series over a time window. Queries are parameterized by the target service
@@ -187,8 +192,7 @@ individual traces and their spans during development.
 
 ### Nginx (frontend)
 
-**What it does:** Serves the static frontend files and proxies API requests to the
-aggregator.
+**What it does:** Serves the static frontend files (HTML, CSS, JS) on port 8081.
 
 **Port:** `8081` (host) → `80` (container)  
 **Config:** `infra/nginx.conf`
@@ -197,9 +201,15 @@ The frontend is a set of static HTML, CSS, and JavaScript files in `frontend/`. 
 serves them directly from a volume mount — no build step required, and changes to frontend
 files are visible immediately on browser refresh without restarting the container.
 
-The nginx config also handles SSE (Server-Sent Events) for the demo runner by setting
-`X-Accel-Buffering: no`, which prevents nginx from buffering the streaming response from
-the aggregator before forwarding it to the browser.
+**nginx does not proxy API traffic.** The browser calls the aggregator REST API directly
+on port 8080. If you are looking for API routing rules, there are none — see
+`docker-compose.yml` for the aggregator's port mapping.
+
+SSE buffering is handled by the aggregator itself: `aggregator/demo.py` sets the
+`X-Accel-Buffering: no` response header on streaming endpoints, which instructs any
+upstream nginx proxy to pass chunks through immediately. Because there is no proxy here,
+the header has no effect in the demo stack but is included for compatibility if nginx is
+placed in front of the aggregator in a real deployment.
 
 ---
 

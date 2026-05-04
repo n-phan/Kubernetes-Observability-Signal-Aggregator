@@ -21,6 +21,8 @@ ingester:
 limits_config:
   enforce_metric_name: false
   reject_old_samples: true
+  # 168 h = 7 days. Set high so demo data is not silently dropped if the stack
+  # is brought back up after a weekend pause. Lower this in production.
   reject_old_samples_max_age: 168h
 
 schema_config:

@@ -1,5 +1,5 @@
 """
-Unit tests for SignalAggregator and Correlator.
+Unit tests for SignalAggregator, Correlator, and related helpers.
 
 Uses pytest-asyncio for async tests and unittest.mock to stub clients.
 """
@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from aggregator.clients.loki import _group_multiline, _severity_from_message
 from aggregator.core.aggregator import SignalAggregator
 from aggregator.core.correlator import Correlator
 from aggregator.models.query import QueryRequest, TimeWindow
@@ -147,11 +148,11 @@ class TestCorrelator:
             traces=make_traces(duration_ms=2000.0),
         )
         severities = [e.severity for e in events]
-        # errors should come first
+        # All "error" events must come before any "warn" events
         error_positions = [i for i, s in enumerate(severities) if s == "error"]
         warn_positions = [i for i, s in enumerate(severities) if s == "warn"]
         if error_positions and warn_positions:
-            assert max(error_positions) < min(warn_positions) + len(error_positions)
+            assert max(error_positions) < min(warn_positions)
 
 
 # ---------------------------------------------------------------------------
@@ -235,3 +236,96 @@ class TestSignalAggregator:
         prometheus.query_metrics.assert_not_called()
         jaeger.query_traces.assert_not_called()
         loki.query_logs.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# TimeWindow validation tests
+# ---------------------------------------------------------------------------
+
+
+class TestTimeWindow:
+    def test_from_lookback_produces_valid_window(self) -> None:
+        window = TimeWindow.from_lookback(30)
+        assert window.start < window.end
+        assert abs(window.duration_seconds - 1800) < 5  # allow 5 s clock drift
+
+    def test_validates_start_before_end(self) -> None:
+        now = datetime.now(tz=timezone.utc)
+        with pytest.raises(ValueError, match="start must be before end"):
+            TimeWindow(start=now, end=now)
+
+    def test_resolve_window_uses_explicit_range(self) -> None:
+        req = QueryRequest(
+            target="svc",
+            start="2024-01-01T10:00:00",
+            end="2024-01-01T11:00:00",
+        )
+        window = req.resolve_window()
+        assert window.duration_seconds == 3600.0
+
+    def test_resolve_window_falls_back_to_default_lookback(self) -> None:
+        req = QueryRequest(target="svc")
+        window = req.resolve_window(default_lookback_minutes=15)
+        assert abs(window.duration_seconds - 900) < 5
+
+    def test_lookback_and_range_mutually_exclusive(self) -> None:
+        with pytest.raises(ValueError):
+            QueryRequest(
+                target="svc",
+                lookback_minutes=30,
+                start="2024-01-01T10:00:00",
+                end="2024-01-01T11:00:00",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Loki helper tests — _group_multiline and _severity_from_message
+# ---------------------------------------------------------------------------
+
+
+class TestLokiHelpers:
+    def _log(self, message: str, severity: Severity = Severity.ERROR) -> LogLine:
+        return LogLine(
+            timestamp=datetime.now(tz=timezone.utc),
+            message=message,
+            severity=severity,
+        )
+
+    def test_severity_from_message_extracts_level(self) -> None:
+        sev, body = _severity_from_message("ERROR myservice connection refused")
+        assert sev == Severity.ERROR
+        assert "connection refused" in body
+
+    def test_severity_from_message_unknown_passthrough(self) -> None:
+        sev, body = _severity_from_message("something without a level prefix")
+        assert sev == Severity.UNKNOWN
+        assert body == "something without a level prefix"
+
+    def test_group_multiline_merges_traceback_into_error(self) -> None:
+        from datetime import timedelta
+        now = datetime.now(tz=timezone.utc)
+        lines = [
+            LogLine(timestamp=now, message="ValueError: bad input", severity=Severity.ERROR),
+            LogLine(timestamp=now + timedelta(milliseconds=50), message='  File "app.py", line 10, in handler', severity=Severity.UNKNOWN),
+            LogLine(timestamp=now + timedelta(milliseconds=100), message="  x = int(val)", severity=Severity.UNKNOWN),
+            LogLine(timestamp=now + timedelta(seconds=5), message="INFO: all good", severity=Severity.INFO),
+        ]
+        grouped = _group_multiline(lines)
+        # First entry should have merged the three first lines; INFO stays separate
+        assert len(grouped) == 2
+        assert "File" in grouped[0].message
+        assert grouped[1].severity == Severity.INFO
+
+    def test_group_multiline_does_not_merge_distant_lines(self) -> None:
+        from datetime import timedelta
+        now = datetime.now(tz=timezone.utc)
+        lines = [
+            LogLine(timestamp=now, message="ValueError: bad input", severity=Severity.ERROR),
+            # More than 1 second later — should NOT be merged
+            LogLine(timestamp=now + timedelta(seconds=2), message='  File "app.py", line 10', severity=Severity.UNKNOWN),
+        ]
+        grouped = _group_multiline(lines)
+        assert len(grouped) == 2
+
+    def test_group_multiline_empty_input(self) -> None:
+        assert _group_multiline([]) == []

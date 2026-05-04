@@ -194,7 +194,7 @@ class RichFormatter:
                 trace.trace_id[:16],
                 root.operation_name if root else "—",
                 root.service_name if root else "—",
-                f"{trace.total_duration_ms:.1f} ms",
+                f"{trace.duration_ms:.1f} ms",
                 str(len(trace.spans)),
                 error_text,
             )

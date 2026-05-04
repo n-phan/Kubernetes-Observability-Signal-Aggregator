@@ -31,10 +31,15 @@ SUCCESS=0
 FAIL=0
 
 for i in $(seq 1 "$REQUESTS"); do
-    HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" "${BASE_URL}/crash")
+    # `|| true` prevents set -e from aborting the loop if curl can't connect
+    # (e.g. service-b is briefly restarting after an OOM kill).
+    HTTP_STATUS=$(curl --silent --output /dev/null --write-out "%{http_code}" "${BASE_URL}/crash" || true)
     if [ "$HTTP_STATUS" = "500" ]; then
         FAIL=$((FAIL + 1))
         echo "  [${i}/${REQUESTS}] 500 — crash recorded (expected)"
+    elif [ -z "$HTTP_STATUS" ]; then
+        FAIL=$((FAIL + 1))
+        echo "  [${i}/${REQUESTS}] connection failed — is service-b running?"
     else
         SUCCESS=$((SUCCESS + 1))
         echo "  [${i}/${REQUESTS}] ${HTTP_STATUS} — unexpected response"

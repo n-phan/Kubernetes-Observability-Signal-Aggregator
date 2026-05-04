@@ -25,6 +25,8 @@ class CorrelationEvent(BaseModel):
 
 
 class QueryMeta(BaseModel):
+    """Metadata attached to every query result — identity, time window, and timing."""
+
     query_id: str = Field(default_factory=lambda: str(uuid4()))
     target: str
     namespace: str

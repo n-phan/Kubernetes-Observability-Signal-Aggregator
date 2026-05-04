@@ -97,10 +97,11 @@ class LogsSignal(BaseModel):
     error: str | None = None
 
     def compute_counts(self) -> None:
+        """Populate error_count, warn_count, and total_lines from self.lines."""
         self.error_count = sum(
-            1 for l in self.lines if l.severity in (Severity.ERROR, Severity.CRITICAL)
+            1 for line in self.lines if line.severity in (Severity.ERROR, Severity.CRITICAL)
         )
-        self.warn_count = sum(1 for l in self.lines if l.severity == Severity.WARN)
+        self.warn_count = sum(1 for line in self.lines if line.severity == Severity.WARN)
         self.total_lines = len(self.lines)
 
 
@@ -172,6 +173,7 @@ class TracesSignal(BaseModel):
     error: str | None = None
 
     def compute_stats(self) -> None:
+        """Populate error_trace_count and p99_duration_ms from self.traces."""
         self.error_trace_count = sum(1 for t in self.traces if t.has_errors)
         durations = sorted(t.duration_ms for t in self.traces)
         if durations:
