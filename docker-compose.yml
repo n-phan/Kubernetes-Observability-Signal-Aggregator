@@ -134,7 +134,7 @@ services:
       - "9090:9090"
     volumes:
       - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
+      - obs_aggregator_prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -151,7 +151,7 @@ services:
       - "3100:3100"
     volumes:
       - ./infra/loki-config.yml:/etc/loki/local-config.yaml:ro
-      - loki_data:/loki
+      - obs_aggregator_loki_data:/loki
     command: -config.file=/etc/loki/local-config.yaml
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
@@ -243,5 +243,5 @@ services:
       - aggregator
 
 volumes:
-  prometheus_data:
-  loki_data:
+  obs_aggregator_prometheus_data:
+  obs_aggregator_loki_data:
