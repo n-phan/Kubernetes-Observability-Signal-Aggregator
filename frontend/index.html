@@ -40,7 +40,8 @@
         <div class="query-bar">
             <div class="field">
                 <label>Target</label>
-                <input id="inp-target" type="text" value="service-a" placeholder="service-a" />
+                <input id="inp-target" type="text" value="service-a" placeholder="service-a" list="services-list" />
+                <datalist id="services-list"></datalist>
             </div>
             <div class="field">
                 <label>Namespace</label>
@@ -99,6 +100,21 @@
     <script>
       // Initialise the Demo panel after all components and api.js are loaded.
       DemoPanel.init();
+
+      // Populate the target datalist from Prometheus job labels on load,
+      // and again whenever the endpoint changes.
+      async function loadServices() {
+        const endpoint = $('inp-endpoint').value.trim().replace(/\/$/, '');
+        try {
+          const resp = await fetch(`${endpoint}/services`);
+          if (!resp.ok) return;
+          const services = await resp.json();
+          const dl = document.getElementById('services-list');
+          dl.innerHTML = services.map(s => `<option value="${escHtml(s)}">`).join('');
+        } catch (_) {}
+      }
+      loadServices();
+      $('inp-endpoint').addEventListener('change', loadServices);
     </script>
 
 </body>

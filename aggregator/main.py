@@ -5,11 +5,16 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from aggregator.clients.prometheus import PrometheusClient
 from aggregator.config import settings
 from aggregator.core.aggregator import SignalAggregator
 from aggregator.demo import router as demo_router
 from aggregator.models.query import QueryRequest
 from aggregator.models.result import UnifiedResult
+
+_INFRA_SERVICES: frozenset[str] = frozenset(
+    {"prometheus", "loki", "jaeger", "promtail", "aggregator"}
+)
 
 logging.basicConfig(level=settings.log_level.upper())
 logger = logging.getLogger(__name__)
@@ -55,6 +60,20 @@ async def query(request: QueryRequest) -> UnifiedResult:
     if _aggregator is None:
         raise HTTPException(status_code=503, detail="Aggregator not initialised")
     return await _aggregator.query(request)
+
+
+@app.get("/services")
+async def list_services() -> list[str]:
+    """Return monitored service names from Prometheus, excluding infrastructure jobs."""
+    client = PrometheusClient()
+    try:
+        jobs = await client.get_label_values("job")
+        return [j for j in jobs if j not in _INFRA_SERVICES]
+    except Exception as exc:
+        logger.warning("Failed to fetch service list from Prometheus: %s", exc)
+        return []
+    finally:
+        await client.close()
 
 
 @app.get("/config")
