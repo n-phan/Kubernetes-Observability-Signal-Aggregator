@@ -22,7 +22,9 @@ from aggregator.config import settings
 from aggregator.core.correlator import Correlator
 from aggregator.core.hermes_rca_agent import HermesRCAAgent
 from aggregator.core.rca_analyzer import RCAAnalyzer
+from aggregator.core.rca_followup import RcaFollowUpAssistant
 from aggregator.core.suspicious_absence import SuspiciousAbsenceDetector
+from aggregator.models.followup import FollowUpMessage, FollowUpResponse
 from aggregator.models.query import QueryRequest
 from aggregator.models.rca import LogEvidence, RCAResult
 from aggregator.models.result import CorrelationEvent, QueryMeta, UnifiedResult
@@ -56,6 +58,7 @@ class SignalAggregator:
         jaeger: JaegerClient | None = None,
         correlator: Correlator | None = None,
         rca_analyzer: RCAAnalyzer | None = None,
+        followup_assistant: RcaFollowUpAssistant | None = None,
         github_linker: GitHubLinker | None = None,
         suspicious_absence_detector: SuspiciousAbsenceDetector | None = None,
     ) -> None:
@@ -101,6 +104,7 @@ class SignalAggregator:
         else:
             self._rca_analyzer = simple_rca_analyzer
             self._fallback_rca_analyzer = None
+        self._followup_assistant = followup_assistant
         self._github_linker = github_linker
 
     async def query(self, request: QueryRequest) -> UnifiedResult:
@@ -208,6 +212,50 @@ class SignalAggregator:
 
         return result
 
+    async def follow_up(
+        self,
+        *,
+        incident: UnifiedResult,
+        question: str,
+        history: list[FollowUpMessage],
+    ) -> FollowUpResponse:
+        if not incident.rca.performed:
+            raise ValueError("RCA must be performed before asking follow-up questions")
+        if self._followup_assistant is None and settings.rca_enabled:
+            self._followup_assistant = self._make_followup_assistant()
+        if not self._followup_assistant:
+            return FollowUpResponse(
+                answer="",
+                provider=None,
+                fallback_used=False,
+                error="RCA follow-up assistant is disabled",
+            )
+        return await self._followup_assistant.answer(
+            incident=incident,
+            question=question,
+            history=history,
+        )
+
+    def _make_followup_assistant(self) -> RcaFollowUpAssistant:
+        return RcaFollowUpAssistant(
+            hermes=HermesRCAAgent(
+                api_url=settings.hermes_api_url,
+                api_key=settings.hermes_api_key,
+                model=settings.hermes_model,
+                timeout_seconds=settings.hermes_timeout_seconds,
+                prometheus=self._prometheus,
+                loki=self._loki,
+                jaeger=self._jaeger,
+                correlator=self._correlator,
+                tools_enabled=settings.hermes_tools_enabled,
+                investigation_mode="dossier",
+                max_tool_rounds=settings.hermes_max_tool_rounds,
+                max_tool_calls=settings.hermes_max_tool_calls,
+                tool_lookback_max_minutes=settings.hermes_tool_lookback_max_minutes,
+            ),
+            anthropic_api_key=settings.anthropic_api_key,
+        )
+
     # ------------------------------------------------------------------
     # Safe wrappers — catch backend errors, return partial results
     # ------------------------------------------------------------------
@@ -311,6 +359,8 @@ class SignalAggregator:
             closers.append(self._rca_analyzer.close())
         if self._fallback_rca_analyzer:
             closers.append(self._fallback_rca_analyzer.close())
+        if self._followup_assistant:
+            closers.append(self._followup_assistant.close())
         if self._github_linker:
             closers.append(self._github_linker.close())
         await asyncio.gather(*closers)

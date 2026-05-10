@@ -15,15 +15,16 @@ class RcaPanel {
   // options.rca        – the rca object from the API response (may be null)
   // options.showRca    – if false, renders the "not yet performed" placeholder
   // options.hasErrors  – used by the placeholder to customize its message
-  constructor({ rca, showRca, hasErrors }) {
+  // options.followups  – stateless browser-side follow-up chat history
+  constructor({ rca, showRca, hasErrors, followups }) {
     this.element = showRca && rca?.performed
-      ? this._buildResults(rca)
+      ? this._buildResults(rca, followups || [])
       : this._buildPlaceholder(hasErrors);
   }
 
   // ── Full results view ───────────────────────────────────────────────────────
 
-  _buildResults(rca) {
+  _buildResults(rca, followups) {
     const confidence    = rca.confidence || 0;
     const confidencePct = Math.round(confidence * 100);
     const barColor      = confidenceColor(confidence);
@@ -115,6 +116,7 @@ class RcaPanel {
           <div class="rca-subsection-title">Code references</div>
           <div class="code-refs">${codeRefsHtml}</div>
         </div>` : ''}
+      ${this._buildFollowupChat(followups)}
     `;
 
     const header = `
@@ -125,6 +127,58 @@ class RcaPanel {
 
     const el = collapsible(header, body);
     return el;
+  }
+
+  _buildFollowupChat(followups) {
+    const starters = [
+      'What’s the blast radius?',
+      'What should I check first?',
+      'What evidence supports this?',
+    ];
+    const messagesHtml = (followups || []).map(item => {
+      const role = item.role === 'user' ? 'user' : 'assistant';
+      const source = role === 'assistant' && item.provider
+        ? `<div class="rca-followup-source">${escHtml(item.provider)}${item.fallback_used ? ' fallback' : ''}</div>`
+        : '';
+      return `
+        <div class="rca-followup-message ${role}">
+          <div class="rca-followup-role">${role === 'user' ? 'You' : 'Assistant'}</div>
+          <div class="rca-followup-text">${escHtml(item.content || '')}</div>
+          ${source}
+        </div>
+      `;
+    }).join('');
+    const startersHtml = starters.map(text => `
+      <button
+        type="button"
+        class="rca-followup-suggestion"
+        onclick="runRcaFollowup('${escHtml(text)}')"
+      >${escHtml(text)}</button>
+    `).join('');
+
+    return `
+      <div class="rca-subsection rca-followup">
+        <div class="rca-subsection-title">Follow-up</div>
+        <div class="rca-followup-suggestions">${startersHtml}</div>
+        <div class="rca-followup-messages">
+          ${messagesHtml || '<div class="rca-followup-empty">Ask a scoped follow-up about this RCA.</div>'}
+        </div>
+        <form
+          class="rca-followup-form"
+          id="rca-followup-form"
+          onsubmit="event.preventDefault(); runRcaFollowup();"
+        >
+          <textarea
+            id="rca-followup-input"
+            class="rca-followup-input"
+            rows="2"
+            placeholder="Ask about blast radius, first checks, or evidence…"
+          ></textarea>
+          <button type="submit" id="rca-followup-send" class="rca-followup-send">Ask</button>
+        </form>
+        <div id="rca-followup-status" class="rca-followup-status"></div>
+      </div>
+    `;
   }
 
   // ── Placeholder view (RCA not yet run) ────────────────────────────────────

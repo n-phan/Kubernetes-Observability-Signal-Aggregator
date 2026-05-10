@@ -23,8 +23,10 @@ from aggregator.core.hermes_rca_agent import (
     _tool_schemas,
 )
 from aggregator.core.rca_analyzer import RCAAnalyzer
+from aggregator.core.rca_followup import RcaFollowUpAssistant, _build_followup_messages
 from aggregator.core.suspicious_absence import SuspiciousAbsenceDetector
 from aggregator.output.formatter import RichFormatter
+from aggregator.models.followup import FollowUpMessage, FollowUpRequest
 from aggregator.models.query import QueryRequest, TimeWindow
 from aggregator.models.rca import RCAResult
 from aggregator.models.result import CorrelationEvent, QueryMeta, UnifiedResult
@@ -486,6 +488,190 @@ class TestSignalAggregator:
         assert result.rca.log_evidence
         assert github_linker.enrich.await_count == 1
         assert github_linker.enrich.await_args.args[0].summary == "Hermes RCA"
+
+    @pytest.mark.asyncio
+    async def test_follow_up_requires_completed_rca(self) -> None:
+        agg = self._make_aggregator()
+        incident = UnifiedResult(
+            meta=QueryMeta(
+                target="my-api",
+                namespace="default",
+                window_start=datetime.now(tz=timezone.utc) - timedelta(minutes=30),
+                window_end=datetime.now(tz=timezone.utc),
+            ),
+            metrics=make_metrics(),
+            logs=make_logs(),
+            traces=make_traces(),
+        )
+
+        with pytest.raises(ValueError, match="RCA must be performed"):
+            await agg.follow_up(incident=incident, question="What now?", history=[])
+
+
+# ---------------------------------------------------------------------------
+# RCA follow-up assistant tests
+# ---------------------------------------------------------------------------
+
+
+class TestRcaFollowUpAssistant:
+    def _incident(self) -> UnifiedResult:
+        now = datetime.now(tz=timezone.utc)
+        logs = make_logs(error_count=2, total=4)
+        metrics = make_metrics(error_rate=0.2)
+        traces = make_traces(count=1, has_errors=True, duration_ms=1400)
+        incident = UnifiedResult(
+            meta=QueryMeta(
+                target="service-b",
+                namespace="default",
+                window_start=now - timedelta(minutes=30),
+                window_end=now,
+            ),
+            metrics=metrics,
+            logs=logs,
+            traces=traces,
+            correlations=Correlator().correlate(metrics, logs, traces),
+            rca=RCAResult(
+                performed=True,
+                summary="service-b is returning errors",
+                root_cause="service-b raised RuntimeError during request handling",
+                confidence=0.82,
+                supporting_evidence=["error logs and traces point at service-b"],
+            ),
+        )
+        return incident
+
+    def _assistant(self) -> tuple[RcaFollowUpAssistant, HermesRCAAgent]:
+        agent = HermesRCAAgent(api_url="http://hermes.test/v1", model="hermes-agent")
+        assistant = RcaFollowUpAssistant(hermes=agent, anthropic_api_key="anthropic-key")
+        return assistant, agent
+
+    @pytest.mark.asyncio
+    async def test_hermes_success_does_not_call_anthropic(self) -> None:
+        assistant, agent = self._assistant()
+        agent._call_hermes = AsyncMock(
+            return_value={"role": "assistant", "content": "Check service-b callers first."}
+        )
+        assistant._client.post = AsyncMock()
+
+        response = await assistant.answer(
+            incident=self._incident(),
+            question="What should I check first?",
+            history=[],
+        )
+        await assistant.close()
+
+        assert response.provider == "hermes"
+        assert response.answer == "Check service-b callers first."
+        assert not response.fallback_used
+        assert agent._call_hermes.await_count == 1
+        assert agent._call_hermes.await_args.kwargs["include_tools"] is False
+        assistant._client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unrelated_followup_returns_scope_reminder_without_model_calls(self) -> None:
+        assistant, agent = self._assistant()
+        agent._call_hermes = AsyncMock()
+        assistant._client.post = AsyncMock()
+
+        response = await assistant.answer(
+            incident=self._incident(),
+            question="Write me a limerick about penguins.",
+            history=[],
+        )
+        await assistant.close()
+
+        assert response.provider is None
+        assert response.fallback_used is False
+        assert "only for questions about the current RCA and incident" in response.answer
+        agent._call_hermes.assert_not_called()
+        assistant._client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hermes_empty_answer_falls_back_to_anthropic(self) -> None:
+        assistant, agent = self._assistant()
+        agent._call_hermes = AsyncMock(return_value={"role": "assistant", "content": "  "})
+        anthropic_response = MagicMock()
+        anthropic_response.status_code = 200
+        anthropic_response.json.return_value = {
+            "content": [{"text": "Blast radius is limited to service-b dependents."}]
+        }
+        assistant._client.post = AsyncMock(return_value=anthropic_response)
+
+        response = await assistant.answer(
+            incident=self._incident(),
+            question="What's the blast radius?",
+            history=[],
+        )
+        await assistant.close()
+
+        assert response.provider == "anthropic"
+        assert response.fallback_used
+        assert "service-b dependents" in response.answer
+        assert response.error == "Hermes returned an empty answer"
+
+    @pytest.mark.asyncio
+    async def test_hermes_failure_without_anthropic_key_returns_clear_error(self) -> None:
+        agent = HermesRCAAgent(api_url="http://hermes.test/v1", model="hermes-agent")
+        agent._call_hermes = AsyncMock(side_effect=RuntimeError("Hermes unavailable"))
+        assistant = RcaFollowUpAssistant(hermes=agent, anthropic_api_key=None)
+
+        response = await assistant.answer(
+            incident=self._incident(),
+            question="What should I check first?",
+            history=[],
+        )
+        await assistant.close()
+
+        assert response.provider is None
+        assert response.fallback_used
+        assert "Hermes unavailable" in (response.error or "")
+        assert "Anthropic fallback is not configured" in (response.error or "")
+
+    def test_blank_followup_question_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="question must not be blank"):
+            FollowUpRequest(incident=self._incident(), question="   ")
+
+    def test_followup_prompt_includes_rca_window_correlations_and_history(self) -> None:
+        incident = self._incident()
+        messages = _build_followup_messages(
+            incident=incident,
+            question="What evidence supports this?",
+            history=[FollowUpMessage(role="user", content="Prior question")],
+            prompt_mode="hermes_native",
+        )
+        prompt_text = "\n".join(str(message.get("content", "")) for message in messages)
+
+        assert "service-b is returning errors" in prompt_text
+        assert incident.meta.window_start.isoformat() in prompt_text
+        assert "correlations" in prompt_text
+        assert "Prior question" in prompt_text
+        assert "What evidence supports this?" in prompt_text
+        assert "registered read-only Hermes MCP observability tools" in prompt_text
+
+    def test_followup_prompt_context_only_forbids_tool_claims(self) -> None:
+        messages = _build_followup_messages(
+            incident=self._incident(),
+            question="What should I check first?",
+            history=[],
+            prompt_mode="context_only",
+        )
+        prompt_text = "\n".join(str(message.get("content", "")) for message in messages)
+
+        assert "You cannot call tools in this path" in prompt_text
+        assert "registered read-only Hermes MCP observability tools" not in prompt_text
+        assert "If the developer asks something unrelated to this RCA" in prompt_text
+
+    def test_followup_request_accepts_round_tripped_null_metric_samples(self) -> None:
+        incident_payload = self._incident().model_dump(mode="json")
+        incident_payload["metrics"]["series"][0]["samples"][0]["value"] = None
+
+        request = FollowUpRequest(
+            incident=incident_payload,
+            question="What should I check first?",
+            history=[],
+        )
+
+        assert request.incident.metrics.series[0].samples[0].value is None
 
 
 def test_parse_sample_value_maps_nan_to_none() -> None:

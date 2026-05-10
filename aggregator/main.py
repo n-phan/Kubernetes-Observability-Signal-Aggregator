@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from aggregator.config import settings
 from aggregator.core.aggregator import SignalAggregator
 from aggregator.demo import router as demo_router
+from aggregator.models.followup import FollowUpRequest, FollowUpResponse
 from aggregator.models.query import QueryRequest
 from aggregator.models.result import UnifiedResult
 
@@ -310,6 +311,22 @@ async def update_service_github(
         yaml.dump(registry, f, default_flow_style=False, sort_keys=False)
 
     return {"ok": True, "name": name, "entry": entry}
+
+
+@app.post("/rca/followup", response_model=FollowUpResponse)
+async def rca_followup(request: FollowUpRequest) -> FollowUpResponse:
+    if _aggregator is None:
+        raise HTTPException(status_code=503, detail="Aggregator not initialised")
+    if not request.incident.rca.performed:
+        raise HTTPException(
+            status_code=400,
+            detail="RCA must be performed before asking follow-up questions",
+        )
+    return await _aggregator.follow_up(
+        incident=request.incident,
+        question=request.question,
+        history=request.history,
+    )
 
 
 @app.get("/config")
