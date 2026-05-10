@@ -9,6 +9,47 @@ function setStatus(state) {
 // Kept so the "Analyze with AI" button can re-use them without re-reading
 // the form inputs (which the user may have changed since the last query).
 let _lastQuery = null;
+let _pendingDemoWindow = null;
+
+function setDemoQueryWindow(event) {
+  if (!event?.query_target || !event?.window_start || !event?.window_end) return;
+  _pendingDemoWindow = {
+    target: event.query_target,
+    start:  event.window_start,
+    end:    event.window_end,
+  };
+
+  const targetInput = $('inp-target');
+  if (targetInput) targetInput.value = event.query_target;
+}
+
+function _buildQueryBody({ target, namespace, lookback, includeRca, range }) {
+  const body = {
+    target,
+    namespace,
+    include_rca: includeRca,
+  };
+
+  if (range?.start && range?.end) {
+    body.start = range.start;
+    body.end = range.end;
+  } else {
+    body.lookback_minutes = lookback;
+  }
+
+  return body;
+}
+
+function _storeLastQuery({ target, namespace, lookback, endpoint, data, requestBody }) {
+  _lastQuery = {
+    target,
+    namespace,
+    lookback,
+    endpoint,
+    start: data?.meta?.window_start || requestBody.start || null,
+    end:   data?.meta?.window_end   || requestBody.end   || null,
+  };
+}
 
 // ── Query (without RCA) ───────────────────────────────────────────────────────
 // Reads the form, sends a POST to /query with include_rca: false, and renders
@@ -22,7 +63,17 @@ async function runQuery() {
 
   if (!target) { alert('Please enter a target service name.'); return; }
 
-  _lastQuery = { target, namespace, lookback, endpoint };
+  const demoRange =
+    _pendingDemoWindow?.target === target
+      ? { start: _pendingDemoWindow.start, end: _pendingDemoWindow.end }
+      : null;
+  const requestBody = _buildQueryBody({
+    target,
+    namespace,
+    lookback,
+    includeRca: false,
+    range: demoRange,
+  });
 
   setStatus('loading');
   $('btn-query').disabled = true;
@@ -37,12 +88,7 @@ async function runQuery() {
     const resp = await fetch(`${endpoint}/query`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        target,
-        namespace,
-        lookback_minutes: lookback,
-        include_rca:      false,   // fast path — RCA triggered separately
-      }),
+      body:    JSON.stringify(requestBody),
     });
 
     if (!resp.ok) {
@@ -51,6 +97,9 @@ async function runQuery() {
     }
 
     const data = await resp.json();
+    _storeLastQuery({ target, namespace, lookback, endpoint, data, requestBody });
+    if (demoRange) _pendingDemoWindow = null;
+
     setStatus('ok');
     renderResult(data, false);
 
@@ -74,7 +123,14 @@ async function runAnalyze() {
     alert('Run a Query first so the analyzer knows which service and time window to investigate.');
     return;
   }
-  const { target, namespace, lookback, endpoint } = _lastQuery;
+  const { target, namespace, lookback, endpoint, start, end } = _lastQuery;
+  const requestBody = _buildQueryBody({
+    target,
+    namespace,
+    lookback,
+    includeRca: true,
+    range: start && end ? { start, end } : null,
+  });
 
   const btn = $('btn-analyze');
   if (btn) { btn.disabled = true; btn.textContent = '⟳ Analyzing…'; }
@@ -84,12 +140,7 @@ async function runAnalyze() {
     const resp = await fetch(`${endpoint}/query`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        target,
-        namespace,
-        lookback_minutes: lookback,
-        include_rca:      true,
-      }),
+      body:    JSON.stringify(requestBody),
     });
 
     if (!resp.ok) {
@@ -98,6 +149,7 @@ async function runAnalyze() {
     }
 
     const data = await resp.json();
+    _storeLastQuery({ target, namespace, lookback, endpoint, data, requestBody });
 
     // Surface RCA errors to the console so they're easy to inspect.
     // The RcaPanel._buildFailed() view handles displaying them to the user.
@@ -147,7 +199,11 @@ function renderResult(data, showRca = true) {
   // or null (no data to show).
   const panels = [
     new MetaBar(data),
-    new RcaPanel({ rca: data.rca, showRca, hasErrors }),
+    new RcaPanel({
+      rca: data.rca,
+      showRca,
+      hasErrors,
+    }),
     CorrelationsPanel.create(data.correlations),
     MetricsPanel.create(data.metrics),
     LogsPanel.create(data.logs),

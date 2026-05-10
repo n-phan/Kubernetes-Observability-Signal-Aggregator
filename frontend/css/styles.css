@@ -351,9 +351,99 @@ main {
   border-bottom: 1px solid var(--border);
 }
 
-.evidence-list    { list-style: none; display: flex; flex-direction: column; gap: 5px; }
-.evidence-list li { display: flex; gap: 8px; font-size: 13px; color: var(--text-dim); font-family: var(--sans); line-height: 1.6; }
-.evidence-list li::before { content: '·'; color: var(--accent-dim); flex-shrink: 0; margin-top: 1px; }
+.evidence-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evidence-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.evidence-index {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.evidence-content { min-width: 0; flex: 1; }
+.evidence-lead {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 2px;
+}
+.evidence-detail {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-family: var(--sans);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+/* ── RCA log evidence ── */
+.rca-log-list { display: flex; flex-direction: column; gap: 8px; }
+
+.rca-log-row {
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+  border-radius: 4px;
+}
+
+.rca-log-row.error { border-left-color: var(--p1); }
+.rca-log-row.warn  { border-left-color: var(--p2); }
+.rca-log-row.info  { border-left-color: var(--cyan); }
+
+.rca-log-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+
+.rca-log-time  { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.rca-log-level { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; }
+.rca-log-level.error { color: var(--p1); }
+.rca-log-level.warn  { color: var(--p2); }
+.rca-log-level.info  { color: var(--cyan); }
+
+.rca-log-message {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rca-log-relevance {
+  margin-top: 6px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--text-dim);
+}
 
 /* ── Actions ── */
 .actions-list { display: flex; flex-direction: column; gap: 8px; }

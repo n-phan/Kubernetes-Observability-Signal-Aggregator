@@ -62,6 +62,14 @@ Open `.env` and configure your credentials:
 # Required — enables the "Analyze with AI" button
 ANTHROPIC_API_KEY=sk-ant-api03-...
 
+# Optional — use Hermes as the RCA agent instead of the one-shot Anthropic path.
+# Start a Hermes OpenAI-compatible API server separately, then set:
+RCA_MODE=hermes
+HERMES_API_URL=http://host.docker.internal:8642/v1
+HERMES_MODEL=hermes-agent
+HERMES_TOOLS_ENABLED=true
+HERMES_INVESTIGATION_MODE=tools_first
+
 # Optional — adds a "Code references" section to RCA results with GitHub links
 # The GITHUB_REPO is pre-configured for this repository (n-phan/k8s-obs-aggregator-final).
 # If you fork this project to a different repo, update GITHUB_REPO to your fork.
@@ -69,7 +77,7 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 GITHUB_TOKEN=github_pat_...
 ```
 
-`ANTHROPIC_API_KEY` is the only setting that must be filled in. The GitHub integration is purely optional — RCA produces a full analysis (summary, root cause, recommended actions) without it.
+`ANTHROPIC_API_KEY` is the only setting that must be filled in for the default RCA mode. To use Hermes, run a Hermes OpenAI-compatible API server and set `RCA_MODE=hermes`; Hermes first calls the aggregator overview tool, then can call read-only metrics, logs, traces, and correlation tools for drill-down evidence. If Hermes is unavailable, the aggregator falls back to the default one-shot RCA when `ANTHROPIC_API_KEY` is configured. The GitHub integration is purely optional — RCA produces a full analysis (summary, root cause, recommended actions) without it.
 
 ### 2. Start the stack
 

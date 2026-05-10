@@ -9,27 +9,33 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import yaml
 
+from aggregator.clients.github import GitHubLinker
 from aggregator.clients.jaeger import JaegerClient
 from aggregator.clients.loki import LokiClient
 from aggregator.clients.prometheus import PrometheusClient
-from aggregator.clients.github import GitHubLinker
 from aggregator.config import settings
 from aggregator.core.correlator import Correlator
+from aggregator.core.hermes_rca_agent import HermesRCAAgent
 from aggregator.core.rca_analyzer import RCAAnalyzer
 from aggregator.core.suspicious_absence import SuspiciousAbsenceDetector
 from aggregator.models.query import QueryRequest
+from aggregator.models.rca import LogEvidence, RCAResult
 from aggregator.models.result import CorrelationEvent, QueryMeta, UnifiedResult
-from aggregator.models.signals import LogsSignal, MetricsSignal, TracesSignal
+from aggregator.models.signals import LogsSignal, MetricsSignal, Severity, TracesSignal
 
 logger = logging.getLogger(__name__)
 
+MAX_RCA_LOG_EVIDENCE = 5
 
-async def _skipped(signal: MetricsSignal | LogsSignal | TracesSignal) -> MetricsSignal | LogsSignal | TracesSignal:
+
+async def _skipped(
+    signal: MetricsSignal | LogsSignal | TracesSignal,
+) -> MetricsSignal | LogsSignal | TracesSignal:
     """Return a default signal when a backend is disabled via --no-* flag."""
     return signal
 
@@ -61,7 +67,7 @@ class SignalAggregator:
         self._suspicious_absence_detector = (
             suspicious_absence_detector or SuspiciousAbsenceDetector()
         )
-        self._rca_analyzer = rca_analyzer or (
+        simple_rca_analyzer = (
             RCAAnalyzer(
                 api_key=settings.anthropic_api_key,
                 repo=settings.github_repo,
@@ -69,16 +75,33 @@ class SignalAggregator:
             if settings.rca_enabled
             else None
         )
-        self._github_linker = github_linker or (
-            GitHubLinker(
-                token=settings.github_token,
-                repo=settings.github_repo,
-                default_branch=settings.github_default_branch,
-                path_prefix=settings.github_path_prefix,
+        if rca_analyzer is not None:
+            self._rca_analyzer = rca_analyzer
+            self._fallback_rca_analyzer = None
+        elif not settings.rca_enabled:
+            self._rca_analyzer = None
+            self._fallback_rca_analyzer = None
+        elif settings.rca_mode == "hermes":
+            self._rca_analyzer = HermesRCAAgent(
+                api_url=settings.hermes_api_url,
+                api_key=settings.hermes_api_key,
+                model=settings.hermes_model,
+                timeout_seconds=settings.hermes_timeout_seconds,
+                prometheus=self._prometheus,
+                loki=self._loki,
+                jaeger=self._jaeger,
+                correlator=self._correlator,
+                tools_enabled=settings.hermes_tools_enabled,
+                investigation_mode=settings.hermes_investigation_mode,
+                max_tool_rounds=settings.hermes_max_tool_rounds,
+                max_tool_calls=settings.hermes_max_tool_calls,
+                tool_lookback_max_minutes=settings.hermes_tool_lookback_max_minutes,
             )
-            if settings.github_repo
-            else None
-        )
+            self._fallback_rca_analyzer = simple_rca_analyzer
+        else:
+            self._rca_analyzer = simple_rca_analyzer
+            self._fallback_rca_analyzer = None
+        self._github_linker = github_linker
 
     async def query(self, request: QueryRequest) -> UnifiedResult:
         """
@@ -151,8 +174,22 @@ class SignalAggregator:
         # RCA — only runs when explicitly requested and error signals exist
         if request.include_rca and self._rca_analyzer:
             rca = await self._rca_analyzer.analyze(result)
-            if rca.performed and settings.github_repo:
-                rca = await self._enrich_with_github(rca, logs, request.target)
+            if (
+                self._fallback_rca_analyzer
+                and not rca.performed
+                and rca.error
+            ):
+                logger.warning("Primary RCA failed; falling back to simple RCA: %s", rca.error)
+                fallback_rca = await self._fallback_rca_analyzer.analyze(result)
+                if fallback_rca.performed:
+                    rca = fallback_rca
+            if rca.performed:
+                if self._github_linker:
+                    rca = await self._github_linker.enrich(rca, logs)
+                else:
+                    rca = await self._enrich_with_github(rca, logs, request.target)
+            if rca.performed and "log_evidence" not in rca.model_fields_set:
+                rca.log_evidence = _default_log_evidence(logs)
             result.rca = rca
 
         total_ms = (time.monotonic() - t0) * 1000
@@ -220,10 +257,10 @@ class SignalAggregator:
 
     async def _enrich_with_github(
         self,
-        rca: "RCAResult",  # noqa: F821 — imported at runtime
+        rca: RCAResult,
         logs: LogsSignal,
         target: str,
-    ):
+    ) -> RCAResult:
         """
         Create a per-query GitHubLinker using the per-service config from
         service-registry.yml, then enrich *rca* with code references.
@@ -272,15 +309,54 @@ class SignalAggregator:
         ]
         if self._rca_analyzer:
             closers.append(self._rca_analyzer.close())
+        if self._fallback_rca_analyzer:
+            closers.append(self._fallback_rca_analyzer.close())
         if self._github_linker:
             closers.append(self._github_linker.close())
         await asyncio.gather(*closers)
 
-    async def __aenter__(self) -> "SignalAggregator":
+    async def __aenter__(self) -> SignalAggregator:
         return self
 
     async def __aexit__(self, *args: object) -> None:
         await self.close()
+
+
+def _default_log_evidence(logs: LogsSignal) -> list[LogEvidence]:
+    """
+    Populate RCA log evidence from collected Loki lines when the LLM omits it.
+
+    Hermes is instructed to return log_evidence, but models can still produce an
+    older schema. The frontend RCA report needs a structured field, so use the
+    already-collected logs as a deterministic fallback.
+    """
+    important = [
+        line
+        for line in logs.lines
+        if line.severity in (Severity.ERROR, Severity.CRITICAL, Severity.WARN)
+    ]
+    selected = important[-MAX_RCA_LOG_EVIDENCE:]
+
+    evidence: list[LogEvidence] = []
+    for line in selected:
+        if line.severity in (Severity.ERROR, Severity.CRITICAL):
+            relevance = "Error log collected during the RCA window."
+        elif line.severity == Severity.WARN:
+            relevance = "Warning log collected during the RCA window."
+        else:
+            relevance = "Recent log collected during the RCA window."
+
+        evidence.append(
+            LogEvidence(
+                timestamp=line.timestamp,
+                severity=line.severity.value,
+                message=line.message,
+                relevance=relevance,
+                labels=line.labels,
+            )
+        )
+    return evidence
+
 
 def _sort_correlation_events(events: list[CorrelationEvent]) -> list[CorrelationEvent]:
     return sorted(events, key=lambda event: _severity_rank(event.severity), reverse=True)

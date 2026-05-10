@@ -200,7 +200,9 @@ class TestRegisterEndpoint:
             })
 
         registry_path = tmp_path / "service-registry.yml"
-        assert not registry_path.exists(), "service-registry.yml should NOT be created without GitHub fields"
+        assert not registry_path.exists(), (
+            "service-registry.yml should NOT be created without GitHub fields"
+        )
 
     async def test_preserves_existing_jobs_in_prometheus_yml(
         self, prom_yml: Path, httpx_mock

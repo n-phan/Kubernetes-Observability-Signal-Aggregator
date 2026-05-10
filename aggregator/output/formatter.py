@@ -6,19 +6,24 @@ Output formatters for the unified result.
 """
 from __future__ import annotations
 
-import json
-
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from aggregator.models.rca import RCAResult
 from aggregator.models.result import CorrelationEvent, UnifiedResult
-from aggregator.models.rca import RCAResult, CodeReference
 from aggregator.models.signals import LogLine, MetricSeries, Severity, Trace
 
 console = Console()
+
+
+def _split_evidence(value: str) -> tuple[str, str]:
+    lead, separator, detail = value.partition(" — ")
+    if not separator:
+        return value, ""
+    return lead.strip(), detail.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +58,12 @@ class RichFormatter:
         self._footer(result)
 
     def _rca(self, rca: RCAResult) -> None:
-        conf_color = "red" if rca.confidence >= 0.8 else "yellow" if rca.confidence >= 0.5 else "dim"
+        if rca.confidence >= 0.8:
+            conf_color = "red"
+        elif rca.confidence >= 0.5:
+            conf_color = "yellow"
+        else:
+            conf_color = "dim"
         self._con.print(
             Panel(
                 f"[bold]{rca.summary}[/bold]\n\n"
@@ -68,9 +78,33 @@ class RichFormatter:
 
         if rca.supporting_evidence:
             self._con.print("[dim]Supporting evidence:[/dim]")
-            for ev in rca.supporting_evidence:
-                self._con.print(f"  [dim]·[/dim] {ev}")
+            for idx, ev in enumerate(rca.supporting_evidence, start=1):
+                lead, detail = _split_evidence(ev)
+                self._con.print(f"  [dim]{idx}.[/dim] {lead}")
+                if detail:
+                    self._con.print(f"     [dim]{detail}[/dim]")
             self._con.print()
+
+        if rca.log_evidence:
+            t = Table(box=box.SIMPLE_HEAD, title="Log evidence", title_style="bold green")
+            t.add_column("Time", width=12)
+            t.add_column("Level", width=8)
+            t.add_column("Message")
+            t.add_column("Relevance", style="dim")
+            severity_styles = {
+                "error": "red",
+                "critical": "bold red",
+                "warn": "yellow",
+                "warning": "yellow",
+                "info": "white",
+                "debug": "dim",
+            }
+            for log in rca.log_evidence[:10]:
+                severity = log.severity.upper() if log.severity else "—"
+                style = severity_styles.get(log.severity.lower(), "dim")
+                timestamp = log.timestamp.strftime("%H:%M:%S") if log.timestamp else "—"
+                t.add_row(timestamp, Text(severity, style=style), log.message[:160], log.relevance)
+            self._con.print(t)
 
         if rca.recommended_actions:
             t = Table(box=box.SIMPLE_HEAD, title="Recommended actions", title_style="bold")

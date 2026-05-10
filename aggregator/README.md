@@ -20,6 +20,7 @@ aggregator/
 │   ├── aggregator.py     Orchestrator — fans out queries, assembles UnifiedResult
 │   ├── correlator.py     Rule engine — detects anomalies and cross-signal relationships
 │   └── rca_analyzer.py   LLM interface — builds prompt, calls Anthropic API, parses response
+│   └── hermes_rca_agent.py Hermes RCA adapter — sends incident dossier to Hermes API server
 │
 ├── clients/
 │   ├── base.py           Shared HTTP client — retry logic, timeout, error wrapping
@@ -31,7 +32,7 @@ aggregator/
 ├── models/
 │   ├── signals.py        Data shapes for metrics, logs, and traces
 │   ├── result.py         UnifiedResult, QueryMeta, CorrelationEvent
-│   ├── rca.py            RCAResult, CodeReference, RecommendedAction
+│   ├── rca.py            RCAResult, LogEvidence, CodeReference, RecommendedAction
 │   └── query.py          QueryRequest — the input shape for POST /query
 │
 └── output/
@@ -62,7 +63,8 @@ SignalAggregator.query()          ← core/aggregator.py
     ├── SuspiciousAbsenceDetector  ← missing telemetry / signal-gap checks
     │
     └── (if include_rca=true)
-          ├── RCAAnalyzer.analyze()    ← builds prompt, calls Anthropic API
+          ├── RCAAnalyzer.analyze()    ← default: builds prompt, calls Anthropic API
+          │   or HermesRCAAgent.analyze() when RCA_MODE=hermes
           └── GitHubLinker.enrich()    ← attaches code references
     │
     ▼
@@ -112,6 +114,14 @@ Key settings:
 | `default_lookback_minutes` | 30 | Time window if not specified in the query |
 | `max_log_lines` | 500 | Cap on log lines returned per query |
 | `anthropic_api_key` | (empty) | Enables RCA when set |
+| `rca_mode` | `simple` | `simple` uses the one-shot Anthropic RCA path; `hermes` sends an investigation request to a Hermes API server |
+| `hermes_api_url` | `http://localhost:8642/v1` | Base URL for a Hermes OpenAI-compatible API server |
+| `hermes_model` | `hermes-agent` | Model name sent to Hermes |
+| `hermes_tools_enabled` | `true` | Lets Hermes call the aggregate overview plus read-only metrics, logs, traces, and correlation tools |
+| `hermes_investigation_mode` | `tools_first` | `tools_first` asks Hermes to call the aggregate overview first, then drill into registered MCP observability tools only if needed, and return RCA JSON in chat content; `dossier` sends the bounded incident dossier |
+| `hermes_max_tool_rounds` | `4` | Maximum tool-call rounds before forcing a final RCA answer |
+| `hermes_max_tool_calls` | `8` | Maximum total tool calls per RCA request |
+| `hermes_tool_lookback_max_minutes` | 120 | Maximum lookback Hermes tools may request while investigating |
 | `github_repo` | (empty) | Default GitHub repo for code linking; overridden per-service by `service-registry.yml` |
 | `github_path_prefix` | (empty) | Default path prefix; overridden per-service by `service-registry.yml` |
 
@@ -185,7 +195,8 @@ than proof of service health.
 - Error trace spans with service name, operation, duration, and tags
 
 The model is asked to return a strict JSON object with fields: `summary`, `root_cause`,
-`confidence`, `supporting_evidence`, `recommended_actions`, and `github_search_terms`.
+`confidence`, `supporting_evidence`, `log_evidence`, `recommended_actions`, and
+`github_search_terms`.
 
 **`_parse_response()`** extracts and validates that JSON from the model's reply, handling
 cases where the model wraps the JSON in markdown fences.

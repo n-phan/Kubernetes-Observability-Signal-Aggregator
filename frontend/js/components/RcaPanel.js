@@ -39,8 +39,37 @@ class RcaPanel {
     `).join('');
 
     const evidenceHtml = (rca.supporting_evidence || [])
-      .map(e => `<li>${escHtml(e)}</li>`)
+      .map((e, idx) => {
+        const text = escHtml(e);
+        const separator = text.indexOf(' — ');
+        const hasDetail = separator >= 0;
+        const lead = hasDetail ? text.slice(0, separator).trim() : text;
+        const detail = hasDetail ? text.slice(separator + 3).trim() : '';
+        return `
+        <li class="evidence-item">
+          <span class="evidence-index">${idx + 1}</span>
+          <div class="evidence-content">
+            <div class="evidence-lead">${lead}</div>
+            ${detail ? `<div class="evidence-detail">${detail}</div>` : ''}
+          </div>
+        </li>
+      `;
+      })
       .join('');
+
+    const logEvidenceHtml = (rca.log_evidence || []).map(l => {
+      const level = (l.severity || 'unknown').toLowerCase();
+      const cls   = severityClass(level);
+      return `
+      <div class="rca-log-row ${cls}">
+        <div class="rca-log-meta">
+          <span class="rca-log-time">${fmtTime(l.timestamp)}</span>
+          <span class="rca-log-level ${cls}">${escHtml((l.severity || 'unknown').toUpperCase())}</span>
+        </div>
+        <pre class="rca-log-message">${escHtml(l.message || '')}</pre>
+        ${l.relevance ? `<div class="rca-log-relevance">${escHtml(l.relevance)}</div>` : ''}
+      </div>
+    `}).join('');
 
     const codeRefsHtml = (rca.code_references || []).map(r => {
       const base = r.url || '';
@@ -69,7 +98,12 @@ class RcaPanel {
       ${evidenceHtml ? `
         <div class="rca-subsection">
           <div class="rca-subsection-title">Supporting evidence</div>
-          <ul class="evidence-list">${evidenceHtml}</ul>
+          <ol class="evidence-list">${evidenceHtml}</ol>
+        </div>` : ''}
+      ${logEvidenceHtml ? `
+        <div class="rca-subsection">
+          <div class="rca-subsection-title">Logs</div>
+          <div class="rca-log-list">${logEvidenceHtml}</div>
         </div>` : ''}
       ${actionsHtml ? `
         <div class="rca-subsection">

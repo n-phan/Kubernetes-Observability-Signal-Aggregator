@@ -48,6 +48,27 @@ const MOCK_DATA = {
       'CPU (0.39%) and memory (47.67 MB) are within normal operating ranges',
       'Error rate z-score of 3.8 is statistically significant — not random variance',
     ],
+    log_evidence: [
+      {
+        timestamp: '2026-05-02T19:12:34Z',
+        severity: 'error',
+        message:
+          'Unhandled exception in payment processor:\n' +
+          'ValueError: payment_processor.charge() received None for amount',
+        relevance:
+          'The stack trace identifies the payment-processing path and exception causing the 500s.',
+        labels: { service: 'service-b', handler: '/crash' },
+      },
+      {
+        timestamp: '2026-05-02T19:12:35Z',
+        severity: 'error',
+        message:
+          'Unhandled exception in payment processor:\n' +
+          'ValueError: payment_processor.charge() received None for amount',
+        relevance: 'Repeated error logs show the failure is persistent, not a single request.',
+        labels: { service: 'service-b', handler: '/crash' },
+      },
+    ],
     recommended_actions: [
       {
         priority: 1,
