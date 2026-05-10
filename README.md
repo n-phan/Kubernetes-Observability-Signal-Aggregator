@@ -126,18 +126,23 @@ HERMES_TIMEOUT_SECONDS=90
 HERMES_MAX_TOOL_ROUNDS=4
 HERMES_MAX_TOOL_CALLS=8
 HERMES_TOOL_LOOKBACK_MAX_MINUTES=120
+HERMES_MODEL=hermes-agent
+HERMES_TOOLS_ENABLED=true
+HERMES_INVESTIGATION_MODE=tools_first
 
 # Optional — adds a "Code references" section to RCA results with GitHub links.
 # Per-service repos live in infra/service-registry.yml; GITHUB_REPO is the fallback.
 GITHUB_TOKEN=github_pat_...
 ```
 
-`ANTHROPIC_API_KEY` is the only required setting for the default RCA mode (or set it later
-in the UI's Config LLM panel). To use Hermes, run a Hermes OpenAI-compatible API server and
-set `RCA_MODE=hermes` — Hermes first calls the aggregator's overview tool, then can call
-read-only metrics / logs / traces / correlation tools for drill-down evidence; if Hermes is
-unavailable it falls back to the default one-shot RCA. The GitHub integration is optional —
-RCA produces a full analysis without it.
+`ANTHROPIC_API_KEY` is the only setting that must be filled in for the default RCA mode.
+To use Hermes, run a Hermes OpenAI-compatible API server and set `RCA_MODE=hermes`; Hermes
+first calls the aggregator overview tool, then can call read-only metrics, logs, traces,
+and correlation tools for drill-down evidence. If Hermes is unavailable, the aggregator
+falls back to the default one-shot RCA when `ANTHROPIC_API_KEY` is configured. The GitHub
+integration is purely optional — RCA produces a full analysis (summary, root cause,
+recommended actions) without it.
+`ANTHROPIC_API_KEY` is the only setting that must be filled in for the default RCA mode. To use Hermes, run a Hermes OpenAI-compatible API server and set `RCA_MODE=hermes`; Hermes first calls the aggregator overview tool, then can call read-only metrics, logs, traces, and correlation tools for drill-down evidence. If Hermes is unavailable, the aggregator falls back to the default one-shot RCA when `ANTHROPIC_API_KEY` is configured. The GitHub integration is purely optional — RCA produces a full analysis (summary, root cause, recommended actions) without it.
 
 ### 2. Start the stack
 
