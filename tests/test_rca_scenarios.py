@@ -351,11 +351,14 @@ class TestScenario2_CascadingLatency:
 
     @pytest.mark.asyncio
     async def test_rca_skips_when_no_error_signals(self):
-        """RCA should not run when the service is merely slow but produces no errors."""
+        """RCA should not run when no error or latency signal is present."""
         result = self._build_result()
-        # Override: no error logs, no error traces, no metric spike
+        # Override: no error logs, no error traces, no latency or error metric spike.
         result.logs = _logs(*[_info_log(f"ok {i}") for i in range(5)])
         result.metrics = _metrics(_series("http_error_rate", 0.0))
+        result.traces = _traces_with_error("GET /api", duration_ms=100.0)
+        result.traces.traces[0].spans[0].is_error = False
+        result.traces.compute_stats()
 
         analyzer = RCAAnalyzer(api_key="test-key")
         rca = await analyzer.analyze(result)

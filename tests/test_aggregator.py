@@ -13,7 +13,10 @@ import pytest
 from aggregator.clients.loki import _group_multiline, _severity_from_message
 from aggregator.core.aggregator import SignalAggregator
 from aggregator.core.correlator import Correlator
+from aggregator.core.rca_analyzer import RCAAnalyzer
+from aggregator.core.suspicious_absence import SuspiciousAbsenceDetector
 from aggregator.models.query import QueryRequest, TimeWindow
+from aggregator.models.result import CorrelationEvent, QueryMeta, UnifiedResult
 from aggregator.models.signals import (
     LogLine,
     LogsSignal,
@@ -52,6 +55,18 @@ def make_metrics(error_rate: float = 0.0, has_restart: bool = False) -> MetricsS
             )
         )
     return MetricsSignal(series=series)
+
+
+def make_traffic_metrics(request_rate: float = 1.0) -> MetricsSignal:
+    now = datetime.now(tz=timezone.utc)
+    return MetricsSignal(
+        series=[
+            MetricSeries(
+                name="http_requests_per_second",
+                samples=[MetricSample(timestamp=now, value=request_rate)],
+            )
+        ]
+    )
 
 
 def make_logs(error_count: int = 0, total: int = 10) -> LogsSignal:
@@ -155,6 +170,56 @@ class TestCorrelator:
             assert max(error_positions) < min(warn_positions)
 
 
+class TestSuspiciousAbsenceDetector:
+    def setup_method(self) -> None:
+        self.detector = SuspiciousAbsenceDetector()
+
+    def test_detects_unavailable_backends(self) -> None:
+        events = self.detector.detect(
+            MetricsSignal(error="Prometheus down"),
+            LogsSignal(error="Loki down"),
+            TracesSignal(error="Jaeger down"),
+        )
+
+        assert {event.kind for event in events} == {
+            "metrics_unavailable",
+            "logs_unavailable",
+            "traces_unavailable",
+        }
+
+    def test_detects_traffic_without_logs_or_traces(self) -> None:
+        events = self.detector.detect(
+            make_traffic_metrics(),
+            LogsSignal(),
+            TracesSignal(),
+        )
+
+        assert {event.kind for event in events} == {
+            "traffic_without_logs",
+            "traffic_without_traces",
+        }
+
+    def test_detects_activity_without_metrics(self) -> None:
+        events = self.detector.detect(
+            MetricsSignal(),
+            make_logs(error_count=0, total=3),
+            TracesSignal(),
+        )
+
+        assert {event.kind for event in events} == {"activity_without_metrics"}
+
+    def test_disabled_signals_do_not_create_gap_events(self) -> None:
+        events = self.detector.detect(
+            make_traffic_metrics(),
+            LogsSignal(),
+            TracesSignal(),
+            include_logs=False,
+            include_traces=False,
+        )
+
+        assert events == []
+
+
 # ---------------------------------------------------------------------------
 # SignalAggregator integration tests (with mocked clients)
 # ---------------------------------------------------------------------------
@@ -236,6 +301,92 @@ class TestSignalAggregator:
         prometheus.query_metrics.assert_not_called()
         jaeger.query_traces.assert_not_called()
         loki.query_logs.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_query_adds_suspicious_absence_correlations(self) -> None:
+        agg = self._make_aggregator(
+            metrics=make_traffic_metrics(),
+            logs=LogsSignal(),
+            traces=TracesSignal(),
+        )
+        request = QueryRequest(target="my-api", namespace="default", lookback_minutes=30)
+        result = await agg.query(request)
+
+        kinds = {event.kind for event in result.correlations}
+        assert "traffic_without_logs" in kinds
+        assert "traffic_without_traces" in kinds
+
+    @pytest.mark.asyncio
+    async def test_disabled_signal_does_not_create_absence_correlation(self) -> None:
+        agg = self._make_aggregator(
+            metrics=make_traffic_metrics(),
+            logs=make_logs(error_count=0, total=2),
+            traces=TracesSignal(),
+        )
+        request = QueryRequest(
+            target="my-api",
+            namespace="default",
+            lookback_minutes=30,
+            include_traces=False,
+        )
+        result = await agg.query(request)
+
+        assert "traffic_without_traces" not in {event.kind for event in result.correlations}
+
+
+class TestRcaGate:
+    def test_simple_rca_runs_for_suspicious_absence_event(self) -> None:
+        now = datetime.now(tz=timezone.utc)
+        result = UnifiedResult(
+            meta=QueryMeta(
+                target="service-b",
+                namespace="default",
+                window_start=now,
+                window_end=now,
+            ),
+            metrics=make_traffic_metrics(),
+            logs=LogsSignal(),
+            traces=TracesSignal(),
+            correlations=[
+                CorrelationEvent(
+                    kind="traffic_without_traces",
+                    description="Traffic exists but traces are absent",
+                    severity="warn",
+                )
+            ],
+        )
+        analyzer = RCAAnalyzer(api_key="test-key")
+
+        assert analyzer._should_run(result)
+
+    def test_simple_rca_prompt_includes_telemetry_gap_context(self) -> None:
+        now = datetime.now(tz=timezone.utc)
+        result = UnifiedResult(
+            meta=QueryMeta(
+                target="service-b",
+                namespace="default",
+                window_start=now,
+                window_end=now,
+            ),
+            metrics=make_traffic_metrics(),
+            logs=LogsSignal(),
+            traces=TracesSignal(),
+            correlations=[
+                CorrelationEvent(
+                    kind="traffic_without_traces",
+                    description="Traffic exists but traces are absent",
+                    severity="warn",
+                )
+            ],
+        )
+        analyzer = RCAAnalyzer(api_key="test-key")
+
+        prompt = analyzer._build_prompt(result)
+
+        assert "## Signal health" in prompt
+        assert "## Telemetry gaps" in prompt
+        assert "traffic_without_traces" in prompt
+        assert "observability blind spot" in prompt
 
 
 # ---------------------------------------------------------------------------

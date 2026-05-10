@@ -21,8 +21,9 @@ from aggregator.clients.github import GitHubLinker
 from aggregator.config import settings
 from aggregator.core.correlator import Correlator
 from aggregator.core.rca_analyzer import RCAAnalyzer
+from aggregator.core.suspicious_absence import SuspiciousAbsenceDetector
 from aggregator.models.query import QueryRequest
-from aggregator.models.result import QueryMeta, UnifiedResult
+from aggregator.models.result import CorrelationEvent, QueryMeta, UnifiedResult
 from aggregator.models.signals import LogsSignal, MetricsSignal, TracesSignal
 
 logger = logging.getLogger(__name__)
@@ -50,12 +51,16 @@ class SignalAggregator:
         correlator: Correlator | None = None,
         rca_analyzer: RCAAnalyzer | None = None,
         github_linker: GitHubLinker | None = None,
+        suspicious_absence_detector: SuspiciousAbsenceDetector | None = None,
     ) -> None:
         # Clients are injected for testability; defaults use settings
         self._prometheus = prometheus or PrometheusClient()
         self._loki = loki or LokiClient()
         self._jaeger = jaeger or JaegerClient()
         self._correlator = correlator or Correlator()
+        self._suspicious_absence_detector = (
+            suspicious_absence_detector or SuspiciousAbsenceDetector()
+        )
         self._rca_analyzer = rca_analyzer or (
             RCAAnalyzer(
                 api_key=settings.anthropic_api_key,
@@ -115,8 +120,17 @@ class SignalAggregator:
 
         metrics, logs, traces = await asyncio.gather(metrics_task, logs_task, traces_task)
 
-        # Correlate
+        # Correlate obvious anomalies plus suspicious telemetry gaps.
         correlations = self._correlator.correlate(metrics, logs, traces)
+        absence_events = self._suspicious_absence_detector.detect(
+            metrics,
+            logs,
+            traces,
+            include_metrics=request.include_metrics,
+            include_logs=request.include_logs,
+            include_traces=request.include_traces,
+        )
+        correlations = _sort_correlation_events([*correlations, *absence_events])
 
         # Build preliminary result so RCA can read it
         total_ms = (time.monotonic() - t0) * 1000
@@ -267,3 +281,10 @@ class SignalAggregator:
 
     async def __aexit__(self, *args: object) -> None:
         await self.close()
+
+def _sort_correlation_events(events: list[CorrelationEvent]) -> list[CorrelationEvent]:
+    return sorted(events, key=lambda event: _severity_rank(event.severity), reverse=True)
+
+
+def _severity_rank(severity: str) -> int:
+    return {"error": 3, "warn": 2, "info": 1}.get(severity, 0)

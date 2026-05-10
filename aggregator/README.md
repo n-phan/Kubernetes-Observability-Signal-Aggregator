@@ -59,6 +59,7 @@ SignalAggregator.query()          ← core/aggregator.py
     │     └── JaegerClient.query_traces()
     │
     ├── Correlator.correlate()     ← rule-based cross-signal analysis
+    ├── SuspiciousAbsenceDetector  ← missing telemetry / signal-gap checks
     │
     └── (if include_rca=true)
           ├── RCAAnalyzer.analyze()    ← builds prompt, calls Anthropic API
@@ -128,8 +129,9 @@ from aggregator.config import settings
 1. Resolves the time window from the request
 2. Fans out to all three backends concurrently using `asyncio.gather`
 3. Passes results to the `Correlator`
-4. Optionally runs RCA and GitHub enrichment
-5. Returns the assembled `UnifiedResult`
+4. Adds suspicious absence events when telemetry is missing or inconsistent
+5. Optionally runs RCA and GitHub enrichment
+6. Returns the assembled `UnifiedResult`
 
 All client dependencies are injected via the constructor, which makes the class fully
 testable — the test suite passes in mock clients directly.
@@ -157,6 +159,13 @@ Correlation events are sorted by severity before being returned. The code includ
 `# ML-HOOK` comments at each decision point marking where rule-based logic could
 be replaced or augmented with a trained model.
 
+The aggregator also emits suspicious absence events when missing telemetry is itself
+worth investigating. Examples include Prometheus, Loki, or Jaeger being unavailable,
+request traffic with zero logs or traces, and logs/traces showing activity while
+Prometheus returns no metric series. These events are returned as normal
+`CorrelationEvent` objects with kinds such as `traffic_without_traces` and can trigger
+low-confidence RCA instead of silently skipping analysis.
+
 ---
 
 ### `core/rca_analyzer.py` — LLM interface
@@ -164,8 +173,10 @@ be replaced or augmented with a trained model.
 `RCAAnalyzer` calls the Anthropic API to generate a structured root cause hypothesis.
 
 **`_should_run()`** gates the analysis — RCA only runs when there is something meaningful
-to analyze: error log lines, error correlation events, error trace spans, or a latency
-metric above 1 second. This prevents the LLM being called on clean queries.
+to analyze: error log lines, error correlation events, error trace spans, latency
+evidence above the incident threshold, or suspicious absence events. Clean queries with
+present telemetry still skip RCA, but missing telemetry is treated as uncertainty rather
+than proof of service health.
 
 **`_build_prompt()`** assembles the context sent to the model, including:
 - Detected correlation events

@@ -18,6 +18,8 @@ from datetime import datetime
 
 import httpx
 
+from aggregator.core.rca_gate import should_run_rca
+from aggregator.core.suspicious_absence import is_suspicious_absence_event
 from aggregator.models.rca import RCAResult, RecommendedAction
 from aggregator.models.result import UnifiedResult
 from aggregator.models.signals import LogLine, MetricSeries, Severity, Span
@@ -31,14 +33,6 @@ MODEL = "claude-sonnet-4-6"
 MAX_LOG_SAMPLES = 20
 MAX_TRACE_SPANS = 10
 MAX_METRIC_SERIES = 8
-
-# p99/p95 latency above this threshold (in seconds) triggers RCA even with no hard errors.
-# A value above 1 second is considered anomalous for most internal services.
-LATENCY_ANOMALY_THRESHOLD_S = 1.0
-
-# Metric name keywords that indicate a latency measurement
-_LATENCY_KEYWORDS = ("latency", "duration", "p99", "p95")
-
 
 class RCAAnalyzer:
     """
@@ -96,23 +90,13 @@ class RCAAnalyzer:
         - Error or critical log lines
         - A correlation event with severity "error"
         - At least one error span in the traces
-        - A latency metric (p99/p95/duration) above LATENCY_ANOMALY_THRESHOLD_S
+        - A latency metric or trace above the RCA threshold
+        - A suspicious telemetry absence event
 
         The latency check lets RCA fire on slow-but-not-failing scenarios
         (e.g. a missing DB index) where no HTTP errors are produced.
         """
-        has_log_errors = result.logs.error_count > 0
-        has_error_correlations = any(
-            e.severity == "error" for e in result.correlations
-        )
-        has_error_traces = result.traces.error_trace_count > 0
-        has_latency_anomaly = any(
-            any(kw in s.name.lower() for kw in _LATENCY_KEYWORDS)
-            and s.peak_value is not None
-            and s.peak_value > LATENCY_ANOMALY_THRESHOLD_S
-            for s in result.metrics.series
-        )
-        return has_log_errors or has_error_correlations or has_error_traces or has_latency_anomaly
+        return should_run_rca(result)
 
     def _build_prompt(self, result: UnifiedResult) -> str:
         """
@@ -126,18 +110,63 @@ class RCAAnalyzer:
         numbers and timestamps rather than hallucinating them.
         """
         m = result.meta
+        window = (
+            f"{m.window_start.strftime('%Y-%m-%dT%H:%M:%SZ')} → "
+            f"{m.window_end.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        )
         lines: list[str] = [
-            f"# Kubernetes incident investigation",
+            "# Kubernetes incident investigation",
             f"Target: {m.target}  Namespace: {m.namespace}",
-            f"Window: {m.window_start.strftime('%Y-%m-%dT%H:%M:%SZ')} → {m.window_end.strftime('%Y-%m-%dT%H:%M:%SZ')}",
+            f"Window: {window}",
             "",
         ]
+
+        lines.append("## Signal health")
+        lines.append(
+            "- metrics: "
+            + (
+                f"unavailable ({result.metrics.error})"
+                if result.metrics.error
+                else f"{len(result.metrics.series)} series"
+            )
+        )
+        if result.logs.error:
+            log_health = f"unavailable ({result.logs.error})"
+        else:
+            log_health = (
+                f"{result.logs.total_lines} lines, {result.logs.error_count} errors, "
+                f"{result.logs.warn_count} warnings"
+            )
+        lines.append(f"- logs: {log_health}")
+        if result.traces.error:
+            trace_health = f"unavailable ({result.traces.error})"
+        else:
+            trace_health = (
+                f"{len(result.traces.traces)} traces, "
+                f"{result.traces.error_trace_count} error traces"
+            )
+        lines.append(f"- traces: {trace_health}")
+        lines.append("")
 
         # Correlation events (most important — pre-processed signal)
         if result.correlations:
             lines.append("## Detected correlations")
             for ev in result.correlations:
                 lines.append(f"- [{ev.severity.upper()}] {ev.kind}: {ev.description}")
+            lines.append("")
+
+        telemetry_gaps = [
+            ev for ev in result.correlations if is_suspicious_absence_event(ev)
+        ]
+        if telemetry_gaps:
+            lines.append("## Telemetry gaps")
+            for ev in telemetry_gaps:
+                lines.append(f"- [{ev.severity.upper()}] {ev.kind}: {ev.description}")
+            lines.append(
+                "Treat missing telemetry as uncertainty, not proof that the service is "
+                "healthy. Distinguish an application failure from an observability blind "
+                "spot, and lower confidence when evidence is partial."
+            )
             lines.append("")
 
         # Metric anomalies
@@ -187,6 +216,12 @@ class RCAAnalyzer:
         )
 
         lines.append(repo_context)
+        lines.append("")
+        lines.append(
+            "When telemetry is unavailable, empty, or suspiciously absent, say so "
+            "explicitly. Do not treat missing logs, metrics, or traces as proof of health; "
+            "frame conclusions as lower confidence when observability evidence is partial."
+        )
         lines.append("")
         lines.append(
             "Based on the signals above, perform a root cause analysis. "
