@@ -453,7 +453,14 @@
       const visible = section.classList.toggle('visible');
       const btn = $('btn-demo');
       if (btn) btn.classList.toggle('active', visible);
-      if (visible) this.refreshConfig();
+      if (visible) {
+        // close Services panel if open
+        const spSec = document.getElementById('sp-section');
+        if (spSec && spSec.classList.contains('visible')) {
+          window.ServicePanel && window.ServicePanel.toggle();
+        }
+        this.refreshConfig();
+      }
     },
 
     async refreshConfig() {

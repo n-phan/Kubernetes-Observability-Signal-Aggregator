@@ -743,7 +743,14 @@
   function toggle() {
     const sec = document.getElementById('sp-section');
     const isOpen = sec.classList.toggle('visible');
+    const btn = document.getElementById('btn-services');
+    if (btn) btn.classList.toggle('active', isOpen);
     if (isOpen) {
+      // close Demo panel if open
+      const demoSec = document.getElementById('demo-section');
+      if (demoSec && demoSec.classList.contains('visible')) {
+        window.DemoPanel && window.DemoPanel.toggle();
+      }
       _showTab('registered');
     } else {
       _resetWizard();
