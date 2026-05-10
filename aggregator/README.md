@@ -78,11 +78,20 @@ and traces.
 
 ### `main.py` — HTTP entry point
 
-Defines the FastAPI application and its three routes:
+Defines the FastAPI application and its routes:
 
+**Core**
 - `GET /health` — liveness check, used by Docker healthchecks
 - `POST /query` — main query endpoint, accepts a `QueryRequest`, returns `UnifiedResult`
 - `GET /config` — returns non-sensitive runtime config for debugging
+
+**Service management**
+- `GET /services` — lists registered services (reads `prometheus.yml` scrape configs, excluding infrastructure jobs)
+- `GET /services/registry` — returns `infra/service-registry.yml` as JSON
+- `POST /services/test` — probes a metrics URL and reports reachability
+- `POST /services/register` — appends a new scrape target to `prometheus.yml`, triggers a Prometheus hot-reload, and optionally records GitHub metadata in `service-registry.yml`
+- `PUT /services/{name}` — updates the GitHub metadata for an existing service in `service-registry.yml`; sending an empty string for a field removes it
+- `DELETE /services/{name}` — removes a service from `prometheus.yml`, triggers a reload, and removes its entry from `service-registry.yml`; protected services (`service-a`, `service-b`, and infrastructure) cannot be deleted
 
 Manages a single shared `SignalAggregator` instance via FastAPI's lifespan context, so
 HTTP clients are created once at startup and closed cleanly at shutdown.
@@ -102,8 +111,8 @@ Key settings:
 | `default_lookback_minutes` | 30 | Time window if not specified in the query |
 | `max_log_lines` | 500 | Cap on log lines returned per query |
 | `anthropic_api_key` | (empty) | Enables RCA when set |
-| `github_repo` | (empty) | Enables GitHub code linking when set |
-| `github_path_prefix` | `demo/service-b` | Prepended to stack trace file paths when building GitHub URLs |
+| `github_repo` | (empty) | Default GitHub repo for code linking; overridden per-service by `service-registry.yml` |
+| `github_path_prefix` | (empty) | Default path prefix; overridden per-service by `service-registry.yml` |
 
 The module-level `settings` singleton is imported directly by every other module:
 ```python
@@ -229,13 +238,21 @@ A span is flagged as an error if any of the following tags are present:
 
 Enriches an `RCAResult` with direct links to source code using two strategies, run in sequence:
 
+**Per-service repository resolution**  
+Before either strategy runs, the aggregator reads `infra/service-registry.yml` and looks up
+the queried service to determine which GitHub repo, branch, and path prefix to use. This
+allows each service to point at a different repository. For example:
+- `service-a` and `service-b` live inside the aggregator mono-repo with a `demo/service-*`
+  prefix, so their stack traces map to paths like `demo/service-b/app.py`.
+- `service-c` and `service-d` each have their own dedicated repo with no prefix, so
+  `/app/main.py` maps directly to `main.py` at the repo root.
+
 **Strategy 1 — Stack frame linking** (no API call)  
 Parses `File "..."` references out of log messages (placed there by multiline merging in
-the Loki client) and constructs direct GitHub blob URLs. For service-b, the path
-`/app/app.py` is normalized to `demo/service-b/app.py` using `github_path_prefix` and
-then turned into a link like `github.com/owner/repo/blob/main/demo/service-b/app.py#L88`.
-This strategy only produces results when logs contain Python tracebacks — i.e. when the
-crash scenario is run.
+the Loki client) and constructs direct GitHub blob URLs. The path prefix from the registry
+is applied, then the result is turned into a link like
+`github.com/owner/repo/blob/main/demo/service-b/app.py#L88`.
+This strategy only produces results when logs contain Python tracebacks.
 
 **Strategy 2 — Code search** (GitHub Search API)  
 Takes the `github_search_terms` extracted by the LLM and runs up to three of the most
