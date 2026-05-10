@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Scenario B — Latency spike (slow database query simulation)
+# Scenario C — Latency spike (slow database query simulation)
 # =============================================================================
 #
 # What this does:
@@ -26,7 +26,7 @@ set -euo pipefail
 SERVICE_B_URL="http://localhost:8002"
 REQUESTS=10
 
-echo "==> Scenario B: Latency spike (2 second added delay)"
+echo "==> Scenario C: Latency spike (2 second added delay)"
 echo ""
 echo "Step 1 — Updating docker-compose.yml to set LATENCY_MS=2000..."
 
@@ -71,7 +71,7 @@ echo "Done. Give Prometheus 15 s to scrape the new metrics."
 echo ""
 echo "Next steps:"
 echo "  1. Open http://localhost:8081"
-echo "  2. Type 'service-b' in the target box, click Query"
+echo "  2. Select 'service-b' from the Target dropdown, click Query"
 echo "  3. Look at the Traces panel — spans should show 2 000+ ms durations"
 echo "  4. Check the Logs panel for 'slow query completed' messages"
 echo "  5. Check the Metrics panel for http_request_duration_seconds"

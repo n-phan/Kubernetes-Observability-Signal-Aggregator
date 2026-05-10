@@ -1,0 +1,11 @@
+services:
+  service-a:
+    github_repo: n-phan/Kubernetes-Observability-Signal-Aggregator
+    github_branch: main
+    github_path_prefix: demo/service-a
+  service-b:
+    github_repo: n-phan/Kubernetes-Observability-Signal-Aggregator
+    github_branch: main
+    github_path_prefix: demo/service-b
+  service-c:
+    github_repo: n-phan/service-c

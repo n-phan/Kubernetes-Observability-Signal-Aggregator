@@ -13,7 +13,8 @@ infra/
 ├── prometheus.yml        Prometheus scrape targets and global settings
 ├── loki-config.yml       Loki storage and ingester configuration
 ├── promtail-config.yml   Promtail log scraping and label rules
-└── nginx.conf            Nginx reverse proxy config for the frontend
+├── nginx.conf            Nginx reverse proxy config for the frontend
+└── service-registry.yml  Per-service GitHub metadata for RCA code-reference links
 ```
 
 ---
@@ -29,6 +30,9 @@ backends that collect them, and the aggregator that queries and correlates them.
 │                                                                 │
 │   service-a :8001  ──────────────────►  service-b :8002        │
 │   (upstream API)      HTTP calls         (flaky downstream)     │
+│                                                                 │
+│   service-c :8003                        service-d :8004        │
+│   (payment processor)                    (inventory service)    │
 └────────┬───────────────────────────────────────┬───────────────┘
          │ metrics (/metrics)                     │ metrics, logs, traces
          │ traces (OTLP :4317)                    │
@@ -80,12 +84,17 @@ and stores the resulting metrics for querying.
 **Config:** `infra/prometheus.yml`  
 **Data:** persisted in the `prometheus_data` Docker volume
 
-**Configured scrape targets:**
+**Default scrape targets:**
 
 | Job | Target | Endpoint | Interval |
 |---|---|---|---|
 | `service-a` | `service-a:8001` | `/metrics` | 15s |
 | `service-b` | `service-b:8002` | `/metrics` | 15s |
+| `service-c` | `service-c:8003` | `/metrics` | 15s |
+
+Additional services (e.g. `service-d`) can be registered at runtime via the **☰ Services**
+panel in the frontend, which appends a new `scrape_configs` entry to `prometheus.yml` and
+triggers a hot-reload — no container restart required.
 
 The demo services expose Prometheus-compatible metrics automatically via
 `prometheus-fastapi-instrumentator`. This includes:
@@ -210,6 +219,50 @@ SSE buffering is handled by the aggregator itself: `aggregator/demo.py` sets the
 upstream nginx proxy to pass chunks through immediately. Because there is no proxy here,
 the header has no effect in the demo stack but is included for compatibility if nginx is
 placed in front of the aggregator in a real deployment.
+
+---
+
+## Service registry
+
+`infra/service-registry.yml` maps service names to their GitHub repository metadata. The
+aggregator reads this file when enriching an RCA result with code-reference links — it
+determines which repo and file path to build the GitHub URL from.
+
+```yaml
+services:
+  # Service hosted inside the aggregator repo — needs a path prefix
+  # so the linker can construct demo/service-a/main.py → GitHub blob URL.
+  service-a:
+    github_repo: owner/repo
+    github_branch: main
+    github_path_prefix: demo/service-a
+
+  # Service with its own dedicated repo — main.py lives at the repo root,
+  # so no path prefix is needed.
+  service-c:
+    github_repo: owner/service-c
+```
+
+**Fields:**
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `github_repo` | yes | — | `owner/repo` — the GitHub repository containing the service's source |
+| `github_branch` | no | `main` | Branch used when building blob URLs |
+| `github_path_prefix` | no | _(none)_ | Directory prefix prepended to stack-trace file paths (e.g. `demo/service-a`). Omit when the service has its own repo and `main.py` lives at the root. |
+
+**How it works:**
+
+When the RCA analyzer produces a result that includes Python stack frames (e.g. `File
+"main.py", line 84`), the GitHub linker looks up the queried service in this file. It
+uses `github_repo` and `github_branch` to form the base URL, and prepends
+`github_path_prefix` to the file path so that `/app/main.py` resolves to the correct
+location in the repository (e.g. `demo/service-a/main.py`). Services with their own
+dedicated repos don't need a prefix because their `main.py` is already at the root.
+
+**Editing:** The registry can be edited directly in this file, or through the **Edit**
+button in the **☰ Services → Registered** panel. Changes take effect immediately — no
+container restart required.
 
 ---
 

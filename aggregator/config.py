@@ -36,12 +36,18 @@ class Settings(BaseSettings):
     github_token: str | None = None
     github_repo: str | None = None          # "owner/repo"
     github_default_branch: str = "main"
-    github_path_prefix: str = "demo/service-b"
+    github_path_prefix: str | None = None  # if unset, derived per-query as "demo/{target}"
+
+    # Infrastructure config file paths (relative to project root / WORKDIR /app)
+    prometheus_config_path: str = "infra/prometheus.yml"
+    service_registry_path: str = "infra/service-registry.yml"
 
     # Demo runner — URLs for the in-browser scenario execution feature
     # These must be reachable from inside the aggregator container.
     demo_service_b_url: str = "http://service-b:8002"
     demo_service_a_url: str = "http://service-a:8001"
+    demo_service_c_url: str = "http://service-c:8003"
+    demo_service_d_url: str = "http://service-d:8004"
 
     @field_validator("prometheus_url", "loki_url", "jaeger_url", mode="before")
     @classmethod

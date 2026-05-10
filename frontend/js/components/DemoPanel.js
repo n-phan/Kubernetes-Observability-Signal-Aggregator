@@ -95,7 +95,7 @@
     }
     .demo-scenarios {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(6, 1fr);
       gap: 1px;
       background: var(--border, #1e2330);
     }
@@ -246,6 +246,20 @@
       name:   'Payment crash',
       desc:   'Fires 15 requests to /crash — triggers a full Python traceback each time.',
       meta:   { 'behavior': 'always crashes', 'exception': 'ValueError', 'requests': '15 × /crash' },
+    },
+    {
+      id:     'payment_crash',
+      letter: 'E',
+      name:   'Gateway timeout',
+      desc:   'Sets GATEWAY_FAIL=1 on service-c and fires 15 POST /pay requests. Every call raises GatewayTimeoutError inside charge_gateway() — the full three-frame traceback (pay → process_payment → charge_gateway) is logged to stdout. Configure the service-c GitHub repo in settings so RCA links directly to charge_gateway() in main.py.',
+      meta:   { 'GATEWAY_FAIL': '1', 'exception': 'GatewayTimeoutError', 'requests': '15 × /pay' },
+    },
+    {
+      id:     'inventory_crash',
+      letter: 'F',
+      name:   'DB connection lost',
+      desc:   'Sets DB_FAIL=1 on service-d and fires 15 GET /stock/widget-001 requests. Every call raises DatabaseConnectionError inside query_database() — the full traceback (get_stock → lookup_inventory → query_database) is logged to stdout. Configure the service-d GitHub repo in settings so RCA links directly to query_database() in main.py.',
+      meta:   { 'DB_FAIL': '1', 'exception': 'DatabaseConnectionError', 'requests': '15 × /stock/{item_id}' },
     },
   ];
 
@@ -439,7 +453,14 @@
       const visible = section.classList.toggle('visible');
       const btn = $('btn-demo');
       if (btn) btn.classList.toggle('active', visible);
-      if (visible) this.refreshConfig();
+      if (visible) {
+        // close Services panel if open
+        const spSec = document.getElementById('sp-section');
+        if (spSec && spSec.classList.contains('visible')) {
+          window.ServicePanel && window.ServicePanel.toggle();
+        }
+        this.refreshConfig();
+      }
     },
 
     async refreshConfig() {

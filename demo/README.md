@@ -1,7 +1,18 @@
 # Demo Guide
 
-This directory contains shell scripts that trigger failure scenarios against service-b so
-the observability stack has real signals to analyze.
+This directory contains four demo microservices and the shell scripts that trigger failure
+scenarios against them.
+
+| Service | Port | What it is |
+|---|---|---|
+| `service-a` | 8001 | Upstream API — calls service-b with optional retry / circuit breaker |
+| `service-b` | 8002 | Flaky downstream — all shell-script failure injection happens here |
+| `service-c` | 8003 | Payment processor — `GatewayTimeoutError` on `POST /pay` |
+| `service-d` | 8004 | Inventory service — `DatabaseConnectionError` on `GET /stock/{id}` |
+
+**Shell scripts** (scenarios A–D) cover service-a and service-b and are run from the
+terminal. **Scenarios E–F** (service-c and service-d) are run through the in-browser
+**⚙ Demo** panel, which handles failure injection and traffic generation automatically.
 
 Run all scripts from the **project root directory** (the folder that contains
 `docker-compose.yml`), not from inside `demo/`.
@@ -19,29 +30,61 @@ Run all scripts from the **project root directory** (the folder that contains
 
 ## Scripts
 
-| Script | Scenario | What it changes |
-|---|---|---|
-| `scenario_errors.sh` | A — 70% error rate | `FAILURE_RATE=0.7` on service-b |
-| `scenario_slow.sh` | B — 2 second latency | `LATENCY_MS=2000` on service-b |
-| `scenario_crash.sh` | C — Payment processor crash | Nothing — `/crash` is always enabled |
-| `reset.sh` | Clean slate | Restores defaults, clears all stored data, restarts stack |
+| Script | Scenario | Target | What it changes |
+|---|---|---|---|
+| `scenario_normal.sh` | A — Normal operation | service-a | Resets service-b to defaults, fires baseline traffic |
+| `scenario_errors.sh` | B — High error rate | service-a | `FAILURE_RATE=0.7` on service-b |
+| `scenario_slow.sh` | C — Latency spike | service-b | `LATENCY_MS=2000` on service-b |
+| `scenario_crash.sh` | D — Payment crash | service-b | Nothing — `/crash` is always enabled |
+| `reset.sh` | Clean slate | — | Restores defaults, clears all stored data, restarts stack |
+
+Scenarios E and F (service-c and service-d) are available in the **⚙ Demo** panel in the
+web UI and do not require shell scripts — see [In-browser scenarios](#in-browser-scenarios-service-c-and-service-d) below.
 
 ---
 
 ## Workflow
 
-Every scenario follows the same four steps:
+Every shell-script scenario follows the same four steps:
 
 ```
 1. Run the script      bash demo/scenario_X.sh
 2. Open the web UI     http://localhost:8081
-3. Query the service   type the target name, click Query
+3. Query the service   select the target from the Target dropdown, click Query
 4. Reset               bash demo/reset.sh
 ```
 
 ---
 
-## Scenario A — High error rate
+## Scenario A — Normal operation
+
+**Script:** `bash demo/scenario_normal.sh`
+
+**What it does:**
+Resets service-b to default settings (no failure injection) and fires 20 requests through
+service-a. Use this to establish a clean baseline before running a failure scenario, or to
+confirm the stack is healthy after a reset.
+
+**Query target:** `service-a`
+
+**What to look for:**
+
+- **Logs panel:** INFO entries only — no ERROR lines
+- **Traces panel:** All spans green (no error status)
+- **Metrics panel:** `http_requests_total` with `status="200"` only
+- **RCA panel:** "No error signals found" or `performed: false` — correct for healthy traffic
+
+**Expected script output:**
+```
+  [1/20] 200 OK
+  [2/20] 200 OK
+  ...
+Done. 20 successes and 0 unexpected errors out of 20 requests.
+```
+
+---
+
+## Scenario B — High error rate
 
 **Script:** `bash demo/scenario_errors.sh`
 
@@ -79,7 +122,7 @@ Roughly 70% errors is expected — exact counts will vary due to randomness.
 
 ---
 
-## Scenario B — Latency spike
+## Scenario C — Latency spike
 
 **Script:** `bash demo/scenario_slow.sh`
 
@@ -115,7 +158,7 @@ latency setting was not applied — make sure the script ran without errors befo
 
 ---
 
-## Scenario C — Payment processor crash
+## Scenario D — Payment processor crash
 
 **Script:** `bash demo/scenario_crash.sh`
 
@@ -147,6 +190,53 @@ No environment variable changes are needed — the `/crash` endpoint is always e
 Done. 15 crashes recorded, 0 unexpected successes.
 ```
 All 15 requests returning 500 is correct — the endpoint always crashes.
+
+---
+
+## In-browser scenarios — service-c and service-d (Scenarios E and F)
+
+These scenarios are run from the **⚙ Demo** panel in the web UI (`http://localhost:8081`).
+The panel injects the failure mode, fires traffic, and resets automatically — no terminal
+commands needed.
+
+### Scenario E — Gateway timeout (service-c)
+
+Enables `GATEWAY_FAIL=1` on service-c and fires a burst of `POST /pay` requests. Each
+request walks the call chain `pay() → process_payment() → validate_card() →
+charge_gateway()` and raises a `GatewayTimeoutError` at the bottom.
+
+**Query target:** `service-c`
+
+**What to look for:**
+
+- **Logs panel:** The three-frame traceback — `charge_gateway` → `validate_card` →
+  `process_payment` — merged into a single log entry by the Loki client
+- **Metrics panel:** `payment_errors_total` counter incrementing
+- **Traces panel:** Error spans on `service-c`
+- **RCA panel:** Stack frame links pointing to the `charge_gateway()` function in the
+  `n-phan/service-c` GitHub repo
+
+### Scenario F — DB connection lost (service-d)
+
+Enables `DB_FAIL=1` on service-d and fires a burst of `GET /stock/{item_id}` requests.
+Each request walks the chain `get_stock() → lookup_inventory() → query_database()` and
+raises a `DatabaseConnectionError` simulating a refused PostgreSQL connection.
+
+**Query target:** `service-d`
+
+**What to look for:**
+
+- **Logs panel:** The two-frame traceback — `query_database` → `lookup_inventory` —
+  merged into a single log entry
+- **Metrics panel:** `inventory_lookup_errors_total` counter incrementing
+- **Traces panel:** Error spans on `service-d`
+- **RCA panel:** Stack frame links pointing to `query_database()` in the `n-phan/service-d`
+  GitHub repo
+
+> **Note:** service-c and service-d must be registered with the aggregator before their
+> signals appear. Use **☰ Services → Add new** in the UI, or confirm they are present in
+> `infra/prometheus.yml`. See [`demo/service-c/README.md`](service-c/README.md) and
+> [`demo/service-d/README.md`](service-d/README.md) for registration instructions.
 
 ---
 
@@ -198,8 +288,9 @@ Jaeger collects spans asynchronously. Wait 10–15 seconds after the script fini
 refresh.
 
 **Logs panel shows no results**
-Loki uses service label selectors. Make sure you typed the exact service name — `service-a`
-or `service-b` — in the query box. Labels are case-sensitive.
+Loki uses service label selectors. Make sure the correct service is selected in the
+**Target** dropdown — labels are case-sensitive and must match the Prometheus job name
+exactly (e.g. `service-a`, `service-b`, `service-c`, `service-d`).
 
 **"Analyze with AI" does nothing**
 `ANTHROPIC_API_KEY` is missing or invalid in your `.env` file. Restart the aggregator after

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Scenario C — Payment processor crash with stack trace
+# Scenario D — Payment processor crash with stack trace
 # =============================================================================
 #
 # What this does:
@@ -23,7 +23,7 @@ set -euo pipefail
 BASE_URL="http://localhost:8002"
 REQUESTS=15
 
-echo "==> Scenario C: Payment processor crash"
+echo "==> Scenario D: Payment processor crash"
 echo "    Hitting ${BASE_URL}/crash ${REQUESTS} times..."
 echo ""
 
@@ -51,7 +51,7 @@ echo "Done. ${FAIL} crashes recorded, ${SUCCESS} unexpected successes."
 echo ""
 echo "Give Prometheus ~15 s to scrape, then:"
 echo "  1. Open http://localhost:8081"
-echo "  2. Type 'service-b' in the target box, click Query"
+echo "  2. Select 'service-b' from the Target dropdown, click Query"
 echo "  3. Check the Logs panel for the full Python traceback"
 echo "  4. Check the Traces panel for error spans"
 echo "  5. Click 'Analyze with AI' — the RCA should identify the payment processor issue"

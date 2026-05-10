@@ -1,30 +1,26 @@
-# Prometheus configuration for the demo observability stack.
-#
-# Scrapes metrics from service-a and service-b.
-# Both services expose Prometheus-compatible metrics at /metrics (via FastAPI's built-in integration).
-
 global:
-  scrape_interval: 15s      # How often to scrape each target
-  evaluation_interval: 15s   # How often to evaluate alert rules
+  scrape_interval: 15s
+  evaluation_interval: 15s
   external_labels:
-    monitor: 'obs-aggregator-demo'
-
+    monitor: obs-aggregator-demo
 alerting:
   alertmanagers:
-    - static_configs:
-        - targets: []
-
+  - static_configs:
+    - targets: []
 rule_files: []
-
 scrape_configs:
-  # --- service-a (upstream API, port 8001) ---
-  - job_name: 'service-a'
-    static_configs:
-      - targets: ['service-a:8001']
-    metrics_path: '/metrics'
-
-  # --- service-b (downstream, port 8002) ---
-  - job_name: 'service-b'
-    static_configs:
-      - targets: ['service-b:8002']
-    metrics_path: '/metrics'
+- job_name: service-a
+  static_configs:
+  - targets:
+    - service-a:8001
+  metrics_path: /metrics
+- job_name: service-b
+  static_configs:
+  - targets:
+    - service-b:8002
+  metrics_path: /metrics
+- job_name: service-c
+  static_configs:
+  - targets:
+    - service-c:8003
+  metrics_path: /metrics

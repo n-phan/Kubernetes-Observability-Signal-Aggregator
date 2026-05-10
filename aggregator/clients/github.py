@@ -63,19 +63,34 @@ class GitHubLinker:
             timeout=15.0,
         )
 
-    async def enrich(self, rca: RCAResult, logs: LogsSignal) -> RCAResult:
+    async def enrich(
+        self,
+        rca: RCAResult,
+        logs: LogsSignal,
+        path_prefix: str | None = None,
+    ) -> RCAResult:
         """
         Attach CodeReferences to an RCAResult using two strategies.
         Modifies rca in-place and returns it.
+
+        path_prefix — per-call override for the file path prefix, e.g. "demo/service-d".
+                      Takes precedence over the instance-level prefix set at construction.
         """
         if not self._repo:
             logger.debug("No GitHub repo configured — skipping code linking")
             return rca
 
+        # Resolve the prefix to use for this call
+        resolved_prefix = (
+            path_prefix.rstrip("/") + "/"
+            if path_prefix is not None
+            else self._path_prefix
+        )
+
         refs: list[CodeReference] = []
 
         # Strategy 1: direct stack frame links (no API call needed)
-        stack_refs = self._link_stack_frames(logs)
+        stack_refs = self._link_stack_frames(logs, resolved_prefix)
         refs.extend(stack_refs)
         logger.info("GitHub linker — stack frame refs: %d", len(stack_refs))
 
@@ -100,10 +115,15 @@ class GitHubLinker:
     # Strategy 1: stack frame → direct blob URL
     # ------------------------------------------------------------------
 
-    def _link_stack_frames(self, logs: LogsSignal) -> list[CodeReference]:
+    def _link_stack_frames(
+        self, logs: LogsSignal, path_prefix: str = ""
+    ) -> list[CodeReference]:
         """
         Parse stack traces from log lines and turn each file reference
         into a direct GitHub blob URL.
+
+        path_prefix — already-resolved prefix string (with trailing slash) to
+                      prepend to each extracted filename.
         """
         if not self._repo:
             return []
@@ -117,7 +137,7 @@ class GitHubLinker:
             if not _has_searchable_ext(clean):
                 continue
 
-            full_path = f"{self._path_prefix}{clean}" if self._path_prefix else clean
+            full_path = f"{path_prefix}{clean}" if path_prefix else clean
             url = _blob_url(self._repo, self._branch, full_path, lineno)
             refs.append(
                 CodeReference(

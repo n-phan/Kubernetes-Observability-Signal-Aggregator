@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Scenario A — High error rate (random 500 responses)
+# Scenario B — High error rate (random 500 responses)
 # =============================================================================
 #
 # What this does:
@@ -26,7 +26,7 @@ set -euo pipefail
 SERVICE_A_URL="http://localhost:8001"
 REQUESTS=30
 
-echo "==> Scenario A: High error rate (70%)"
+echo "==> Scenario B: High error rate (70%)"
 echo ""
 echo "Step 1 — Updating docker-compose.yml to set FAILURE_RATE=0.7..."
 
@@ -74,7 +74,7 @@ echo "Done. ${FAIL} errors and ${SUCCESS} successes out of ${REQUESTS} requests.
 echo ""
 echo "Next steps:"
 echo "  1. Open http://localhost:8081"
-echo "  2. Type 'service-a' in the target box, click Query"
+echo "  2. Select 'service-a' from the Target dropdown, click Query"
 echo "  3. Review errors in the Logs and Traces panels"
 echo "  4. Check the Metrics panel for status=\"500\" counts"
 echo "  5. Click 'Analyze with AI' — the RCA should identify service-b errors"

@@ -3,6 +3,8 @@
 # Services
 #   service-b  (8002)  Flaky downstream — failure modes are toggled here
 #   service-a  (8001)  Upstream API — calls service-b, has retry/circuit breaker
+#   service-c  (8003)  Payment processor — GATEWAY_FAIL=1 triggers GatewayTimeoutError
+#   service-d  (8004)  Inventory service — DB_FAIL=1 triggers DatabaseConnectionError
 #   prometheus (9090)  Metrics backend
 #   loki       (3100)  Log aggregation backend
 #   jaeger     (16686) Distributed tracing backend
@@ -123,6 +125,62 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── service-c ──────────────────────────────────────────────────────────────
+  # Payment processor. Demonstrates a three-frame call chain exception.
+  #
+  # Call chain:  POST /pay → process_payment() → validate_card() → charge_gateway()
+  #
+  # Endpoints:
+  #   POST /pay         Process a payment — fails with GatewayTimeoutError when
+  #                     GATEWAY_FAIL=1, logging the full traceback to stdout
+  #   GET  /metrics     Prometheus metrics (payment_errors_total counter)
+  #   GET  /health      Health check
+
+  service-c:
+    build:
+      context: ./demo/service-c
+    ports:
+      - "8003:8003"
+    environment:
+      # Set to "1" to make every charge_gateway() call raise GatewayTimeoutError.
+      # 0 = payments succeed, 1 = gateway times out on every request.
+      GATEWAY_FAIL: "0"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: service-c
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── service-d ──────────────────────────────────────────────────────────────
+  # Inventory service. Demonstrates a two-frame call chain database exception.
+  #
+  # Call chain:  GET /stock/{item_id} → lookup_inventory() → query_database()
+  #
+  # Endpoints:
+  #   GET /stock/{item_id}  Look up stock level — fails with DatabaseConnectionError
+  #                         when DB_FAIL=1, logging the full traceback to stdout
+  #   GET /metrics          Prometheus metrics (inventory_lookup_errors_total counter)
+  #   GET /health           Health check
+
+  service-d:
+    build:
+      context: ./demo/service-d
+    ports:
+      - "8004:8004"
+    environment:
+      # Set to "1" to make every query_database() call raise DatabaseConnectionError.
+      # 0 = DB queries succeed, 1 = connection refused on every request.
+      DB_FAIL: "0"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: service-d
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── Observability backends ─────────────────────────────────────────────────
   # These are third-party services — you should not need to edit them.
   # Config files live in infra/ if you need to adjust scrape targets or
@@ -206,13 +264,13 @@ services:
     build: .
     ports:
       - "8080:8080"
+    volumes:
+      - ./infra:/app/infra:rw
+    env_file: .env
     environment:
       PROMETHEUS_URL: http://prometheus:9090
       LOKI_URL: http://loki:3100
       JAEGER_URL: http://jaeger:16686
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
-      GITHUB_REPO: "${GITHUB_REPO:-}"
       LOG_LEVEL: info
     depends_on:
       prometheus:

@@ -10,6 +10,9 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+
+import yaml
 
 from aggregator.clients.jaeger import JaegerClient
 from aggregator.clients.loki import LokiClient
@@ -134,8 +137,8 @@ class SignalAggregator:
         # RCA — only runs when explicitly requested and error signals exist
         if request.include_rca and self._rca_analyzer:
             rca = await self._rca_analyzer.analyze(result)
-            if self._github_linker and rca.performed:
-                rca = await self._github_linker.enrich(rca, logs)
+            if rca.performed and settings.github_repo:
+                rca = await self._enrich_with_github(rca, logs, request.target)
             result.rca = rca
 
         total_ms = (time.monotonic() - t0) * 1000
@@ -184,6 +187,67 @@ class SignalAggregator:
         except Exception as exc:
             logger.error("Jaeger query failed: %s", exc)
             return TracesSignal(error=str(exc))
+
+    # ------------------------------------------------------------------
+    # GitHub enrichment — per-query linker with per-service config
+    # ------------------------------------------------------------------
+
+    def _load_service_registry(self) -> dict:
+        """
+        Load infra/service-registry.yml.  Returns an empty dict on any
+        read or parse error so callers never need to guard against it.
+        """
+        try:
+            path = Path(settings.service_registry_path)
+            with path.open() as fh:
+                return yaml.safe_load(fh) or {}
+        except Exception:
+            return {}
+
+    async def _enrich_with_github(
+        self,
+        rca: "RCAResult",  # noqa: F821 — imported at runtime
+        logs: LogsSignal,
+        target: str,
+    ):
+        """
+        Create a per-query GitHubLinker using the per-service config from
+        service-registry.yml, then enrich *rca* with code references.
+
+        Resolution order for each field:
+          repo         — registry entry → settings.github_repo
+          branch       — registry entry → settings.github_default_branch
+          path_prefix  — registry entry (may be empty/None) →
+                         "demo/{target}" when using the aggregator repo →
+                         None when service has its own dedicated repo
+        """
+        registry = self._load_service_registry()
+        entry: dict = registry.get("services", {}).get(target, {})
+
+        repo   = entry.get("github_repo")   or settings.github_repo
+        branch = entry.get("github_branch") or settings.github_default_branch
+
+        # Decide path prefix:
+        #   • Registry has an explicit value  → use it (empty string → no prefix)
+        #   • Service uses the aggregator repo → fall back to "demo/{target}"
+        #   • Service has its own repo         → no prefix (main.py is at root)
+        if "github_path_prefix" in entry:
+            path_prefix = entry["github_path_prefix"] or None
+        elif repo == settings.github_repo:
+            path_prefix = settings.github_path_prefix or f"demo/{target}"
+        else:
+            path_prefix = None  # dedicated repo — file lives at root
+
+        linker = GitHubLinker(
+            token=settings.github_token,
+            repo=repo,
+            default_branch=branch,
+            path_prefix=path_prefix,
+        )
+        try:
+            return await linker.enrich(rca, logs)
+        finally:
+            await linker.close()
 
     async def close(self) -> None:
         """Close all underlying HTTP clients."""

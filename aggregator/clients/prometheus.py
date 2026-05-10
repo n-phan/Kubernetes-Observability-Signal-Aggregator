@@ -77,6 +77,16 @@ class PrometheusClient(BaseObservabilityClient):
 
         return MetricsSignal(series=all_series, query_duration_ms=total_duration)
 
+    async def get_label_values(self, label: str) -> list[str]:
+        """Return all values for a Prometheus label (e.g. "job")."""
+        data, _ = await self._get(f"/api/v1/label/{label}/values")
+        if data.get("status") != "success":
+            raise ObservabilityClientError(
+                self.backend_name,
+                f"Non-success status: {data.get('status')} — {data.get('error', '')}",
+            )
+        return data.get("data", [])
+
     async def _range_query(
         self,
         query: str,

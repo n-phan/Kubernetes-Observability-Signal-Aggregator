@@ -40,7 +40,9 @@
         <div class="query-bar">
             <div class="field">
                 <label>Target</label>
-                <input id="inp-target" type="text" value="service-a" placeholder="service-a" />
+                <select id="inp-target" style="width:clamp(120px,18vw,200px)">
+                    <option value="" disabled selected>Select a service…</option>
+                </select>
             </div>
             <div class="field">
                 <label>Namespace</label>
@@ -57,6 +59,7 @@
             <button class="btn-query" id="btn-query" onclick="runQuery()">▶ Query</button>
             <button class="btn-mock"  id="btn-mock"  onclick="runMock()">⊡ Mock</button>
             <button class="btn-mock"  id="btn-demo"  onclick="DemoPanel.toggle()">⚙ Demo</button>
+            <button class="btn-mock"  id="btn-services" onclick="ServicePanel.toggle()">☰ Services</button>
             <div class="status-dot" id="status-dot"></div>
         </div>
     </header>
@@ -93,12 +96,34 @@
     <script src="js/components/LogsPanel.js"></script>
     <script src="js/components/TracesPanel.js"></script>
     <script src="js/components/DemoPanel.js"></script>
+    <script src="js/components/ServicePanel.js"></script>
 
     <script src="js/api.js"></script>
 
     <script>
-      // Initialise the Demo panel after all components and api.js are loaded.
+      // Initialise panels after all components and api.js are loaded.
       DemoPanel.init();
+      ServicePanel.init();
+
+      // Populate the target <select> from Prometheus job labels on load,
+      // and again whenever the endpoint changes or a service is registered.
+      async function loadServices() {
+        const endpoint = $('inp-endpoint').value.trim().replace(/\/$/, '');
+        const sel = $('inp-target');
+        try {
+          const resp = await fetch(`${endpoint}/services`);
+          if (!resp.ok) return;
+          const services = await resp.json();
+          // Preserve current selection if still in list
+          const current = sel.value;
+          sel.innerHTML = '<option value="" disabled>Select a service…</option>'
+            + services.map(s => `<option value="${escHtml(s)}"${s === current ? ' selected' : ''}>${escHtml(s)}</option>`).join('');
+          // If nothing selected, default to placeholder
+          if (!sel.value) sel.value = '';
+        } catch (_) {}
+      }
+      loadServices();
+      $('inp-endpoint').addEventListener('change', loadServices);
     </script>
 
 </body>
