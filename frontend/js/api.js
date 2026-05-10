@@ -160,8 +160,77 @@ function renderResult(data, showRca = true) {
   });
 }
 
-// ── Event listeners ───────────────────────────────────────────────────────────
-// Allow pressing Enter in the target field as a shortcut for the Query button.
-$('inp-target').addEventListener('keydown', e => {
-  if (e.key === 'Enter') runQuery();
-});
+// ── Service registration API wrappers ───────────────────────────────────────── ─────────────────────────────────────────
+
+/**
+ * Probe a metrics URL. Returns { ok: true } or { ok: false, error: "..." }.
+ * Uses the same aggregator endpoint as the rest of the UI.
+ */
+async function testMetricsEndpoint(url) {
+  const endpoint = $('inp-endpoint').value.trim().replace(/\/$/, '');
+  const resp = await fetch(`${endpoint}/services/test`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ url }),
+  });
+  return resp.json();
+}
+
+/**
+ * Delete a registered service by name.
+ * Returns { ok: true, name } or throws on HTTP error.
+ */
+async function deleteService(name) {
+  const endpoint = $('inp-endpoint').value.trim().replace(/\/$/, '');
+  const resp = await fetch(`${endpoint}/services/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.detail || `HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+/**
+ * Update GitHub metadata for an existing service.
+ * payload: { github_repo?, github_branch?, github_path_prefix? }
+ * Send "" to clear a field, null/omit to leave unchanged.
+ * Returns { ok: true, name, entry } or throws on HTTP error.
+ */
+async function updateServiceGithub(name, payload) {
+  const endpoint = $('inp-endpoint').value.trim().replace(/\/$/, '');
+  const resp = await fetch(`${endpoint}/services/${encodeURIComponent(name)}`, {
+    method:  'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.detail || `HTTP ${resp.status}`);
+  }
+  return resp.json();
+}
+
+/**
+ * Register a new service with the aggregator.
+ * payload: { name, metrics_url, github_repo?, github_branch?, github_path_prefix? }
+ * Returns { ok: true, name } or throws on HTTP error.
+ */
+async function registerService(payload) {
+  const endpoint = $('inp-endpoint').value.trim().replace(/\/$/, '');
+  const resp = await fetch(`${endpoint}/services/register`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  });
+  if (resp.status === 409) {
+    const data = await resp.json();
+    throw new Error(data.detail || 'Service already registered');
+  }
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`HTTP ${resp.status}: ${txt}`);
+  }
+  return resp.json();
+}
