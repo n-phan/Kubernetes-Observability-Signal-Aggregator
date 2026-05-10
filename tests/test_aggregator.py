@@ -970,6 +970,31 @@ class TestHermesRCAAgent:
         assert "Telemetry gaps are investigative evidence" in prompt
         assert "observability blind spot" in prompt
 
+class TestRcaGate:
+    def test_simple_rca_runs_for_suspicious_absence_event(self) -> None:
+        now = datetime.now(tz=timezone.utc)
+        result = UnifiedResult(
+            meta=QueryMeta(
+                target="service-b",
+                namespace="default",
+                window_start=now - timedelta(minutes=30),
+                window_end=now,
+            ),
+            metrics=make_traffic_metrics(),
+            logs=LogsSignal(),
+            traces=TracesSignal(),
+            correlations=[
+                CorrelationEvent(
+                    kind="traffic_without_traces",
+                    description="Traffic exists but traces are absent",
+                    severity="warn",
+                )
+            ],
+        )
+        analyzer = RCAAnalyzer(api_key="test-key")
+
+        assert analyzer._should_run(result)
+
     @pytest.mark.asyncio
     async def test_simple_rca_prompt_includes_telemetry_gap_context(self) -> None:
         now = datetime.now(tz=timezone.utc)
@@ -977,7 +1002,7 @@ class TestHermesRCAAgent:
             meta=QueryMeta(
                 target="service-b",
                 namespace="default",
-                window_start=now - timedelta(minutes=30),
+                window_start=now,
                 window_end=now,
             ),
             metrics=make_traffic_metrics(),
