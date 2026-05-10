@@ -128,6 +128,9 @@ HERMES_TIMEOUT_SECONDS=90
 HERMES_MAX_TOOL_ROUNDS=4
 HERMES_MAX_TOOL_CALLS=8
 HERMES_TOOL_LOOKBACK_MAX_MINUTES=120
+HERMES_MODEL=hermes-agent
+HERMES_TOOLS_ENABLED=true
+HERMES_INVESTIGATION_MODE=tools_first
 
 # Optional — adds a "Code references" section to RCA results with GitHub links
 # The GITHUB_REPO is pre-configured for this repository (n-phan/k8s-obs-aggregator-final).
@@ -143,6 +146,7 @@ and correlation tools for drill-down evidence. If Hermes is unavailable, the agg
 falls back to the default one-shot RCA when `ANTHROPIC_API_KEY` is configured. The GitHub
 integration is purely optional — RCA produces a full analysis (summary, root cause,
 recommended actions) without it.
+`ANTHROPIC_API_KEY` is the only setting that must be filled in for the default RCA mode. To use Hermes, run a Hermes OpenAI-compatible API server and set `RCA_MODE=hermes`; Hermes first calls the aggregator overview tool, then can call read-only metrics, logs, traces, and correlation tools for drill-down evidence. If Hermes is unavailable, the aggregator falls back to the default one-shot RCA when `ANTHROPIC_API_KEY` is configured. The GitHub integration is purely optional — RCA produces a full analysis (summary, root cause, recommended actions) without it.
 
 ### 2. Start the stack
 
