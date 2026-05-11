@@ -15,13 +15,16 @@ import json
 import logging
 import re
 from datetime import datetime
+from typing import Any
 
 import httpx
 
+from aggregator.core.rca_gate import should_run_rca
+from aggregator.core.suspicious_absence import is_suspicious_absence_event
 from aggregator.models.query import LlmConfig
-from aggregator.models.rca import RCAResult, RecommendedAction
+from aggregator.models.rca import LogEvidence, RCAResult, RecommendedAction
 from aggregator.models.result import UnifiedResult
-from aggregator.models.signals import LogLine, MetricSeries, Severity, Span
+from aggregator.models.signals import LogLine, Severity, Span
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +38,6 @@ _SUPPORTED_PROVIDERS = frozenset({"anthropic", "claude"})
 MAX_LOG_SAMPLES = 20
 MAX_TRACE_SPANS = 10
 MAX_METRIC_SERIES = 8
-
-# p99/p95 latency above this threshold (in seconds) triggers RCA even with no hard errors.
-# A value above 1 second is considered anomalous for most internal services.
-LATENCY_ANOMALY_THRESHOLD_S = 1.0
-
-# Metric name keywords that indicate a latency measurement
-_LATENCY_KEYWORDS = ("latency", "duration", "p99", "p95")
-
 
 class RCAAnalyzer:
     """
@@ -115,23 +110,13 @@ class RCAAnalyzer:
         - Error or critical log lines
         - A correlation event with severity "error"
         - At least one error span in the traces
-        - A latency metric (p99/p95/duration) above LATENCY_ANOMALY_THRESHOLD_S
+        - A latency metric or trace above the RCA threshold
+        - A suspicious telemetry absence event
 
         The latency check lets RCA fire on slow-but-not-failing scenarios
         (e.g. a missing DB index) where no HTTP errors are produced.
         """
-        has_log_errors = result.logs.error_count > 0
-        has_error_correlations = any(
-            e.severity == "error" for e in result.correlations
-        )
-        has_error_traces = result.traces.error_trace_count > 0
-        has_latency_anomaly = any(
-            any(kw in s.name.lower() for kw in _LATENCY_KEYWORDS)
-            and s.peak_value is not None
-            and s.peak_value > LATENCY_ANOMALY_THRESHOLD_S
-            for s in result.metrics.series
-        )
-        return has_log_errors or has_error_correlations or has_error_traces or has_latency_anomaly
+        return should_run_rca(result)
 
     def _build_prompt(self, result: UnifiedResult) -> str:
         """
@@ -145,18 +130,63 @@ class RCAAnalyzer:
         numbers and timestamps rather than hallucinating them.
         """
         m = result.meta
+        window = (
+            f"{m.window_start.strftime('%Y-%m-%dT%H:%M:%SZ')} → "
+            f"{m.window_end.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        )
         lines: list[str] = [
-            f"# Kubernetes incident investigation",
+            "# Kubernetes incident investigation",
             f"Target: {m.target}  Namespace: {m.namespace}",
-            f"Window: {m.window_start.strftime('%Y-%m-%dT%H:%M:%SZ')} → {m.window_end.strftime('%Y-%m-%dT%H:%M:%SZ')}",
+            f"Window: {window}",
             "",
         ]
+
+        lines.append("## Signal health")
+        lines.append(
+            "- metrics: "
+            + (
+                f"unavailable ({result.metrics.error})"
+                if result.metrics.error
+                else f"{len(result.metrics.series)} series"
+            )
+        )
+        if result.logs.error:
+            log_health = f"unavailable ({result.logs.error})"
+        else:
+            log_health = (
+                f"{result.logs.total_lines} lines, {result.logs.error_count} errors, "
+                f"{result.logs.warn_count} warnings"
+            )
+        lines.append(f"- logs: {log_health}")
+        if result.traces.error:
+            trace_health = f"unavailable ({result.traces.error})"
+        else:
+            trace_health = (
+                f"{len(result.traces.traces)} traces, "
+                f"{result.traces.error_trace_count} error traces"
+            )
+        lines.append(f"- traces: {trace_health}")
+        lines.append("")
 
         # Correlation events (most important — pre-processed signal)
         if result.correlations:
             lines.append("## Detected correlations")
             for ev in result.correlations:
                 lines.append(f"- [{ev.severity.upper()}] {ev.kind}: {ev.description}")
+            lines.append("")
+
+        telemetry_gaps = [
+            ev for ev in result.correlations if is_suspicious_absence_event(ev)
+        ]
+        if telemetry_gaps:
+            lines.append("## Telemetry gaps")
+            for ev in telemetry_gaps:
+                lines.append(f"- [{ev.severity.upper()}] {ev.kind}: {ev.description}")
+            lines.append(
+                "Treat missing telemetry as uncertainty, not proof that the service is "
+                "healthy. Distinguish an application failure from an observability blind "
+                "spot, and lower confidence when evidence is partial."
+            )
             lines.append("")
 
         # Metric anomalies
@@ -208,6 +238,27 @@ class RCAAnalyzer:
         lines.append(repo_context)
         lines.append("")
         lines.append(
+            "For log_evidence, include only log messages that appear in the log samples "
+            "above. Do not invent or paraphrase log lines; use an empty array if no log "
+            "line directly supports the conclusion."
+        )
+        lines.append(
+            "When telemetry is unavailable, empty, or suspiciously absent, say so "
+            "explicitly. Do not treat missing logs, metrics, or traces as proof of health; "
+            "frame conclusions as lower confidence when observability evidence is partial."
+        )
+        lines.append(
+            "For supporting_evidence, write human-readable evidence, not raw tool or metric "
+            "dumps. Do not output prefixes like get_metrics:, get_logs:, get_traces:, or "
+            "get_correlations:, and do not expose internal fields like latest_value=, "
+            "peak_value=, sample_count=, total_lines=, or error_trace_count=. Each item "
+            "should be one concise claim, optionally followed by a second explanatory "
+            "sentence after ' — '. Example: "
+            '"http_error_rate for /crash peaked at 0.1404 req/s — 100% of requests to '
+            'that handler failed".'
+        )
+        lines.append("")
+        lines.append(
             "Based on the signals above, perform a root cause analysis. "
             "Respond ONLY with a valid JSON object — no markdown fences, "
             "no preamble, nothing outside the JSON. Use this exact schema:\n"
@@ -217,7 +268,17 @@ class RCAAnalyzer:
   "root_cause": "<detailed technical explanation of the root cause>",
   "confidence": <float 0.0–1.0>,
   "supporting_evidence": [
-    "<specific signal or data point that supports this conclusion>",
+    "<plain-English evidence claim — optional short explanation>",
+    ...
+  ],
+  "log_evidence": [
+    {
+      "timestamp": "<ISO timestamp or null>",
+      "severity": "<level>",
+      "message": "<exact provided log excerpt>",
+      "relevance": "<why this log matters>",
+      "labels": {"<key>": "<value>"}
+    },
     ...
   ],
   "recommended_actions": [
@@ -229,7 +290,9 @@ class RCAAnalyzer:
     ...
   ],
   "github_search_terms": [
-    "<look at the error log samples and trace spans above and extract: function names, method names, exception class names, and exact custom error message strings you can see there. These are the only good search terms. Do NOT use Prometheus metric names (e.g. http_request_duration_seconds, http_requests_total, http_error_rate) — they are auto-generated by a library and will return 0 results. Do NOT use generic HTTP framework patterns (e.g. 'raise HTTPException', 'status_code 500'). Good examples based on log content: '_process_payment', 'connection pool exhausted', 'FAILURE_RATE', 'payment_processor.charge', 'slow_query'>",
+    "<extract function names, method names, exception class names, and exact custom error strings>",
+    "<do not use Prometheus metric names or generic HTTP framework patterns>",
+    "<good examples: '_process_payment', 'connection pool exhausted', 'FAILURE_RATE'>",
     ...
   ]
 }""")
@@ -283,14 +346,59 @@ class RCAAnalyzer:
             for a in data.get("recommended_actions", [])
         ]
 
-        return RCAResult(
-            summary=data.get("summary", ""),
-            root_cause=data.get("root_cause", ""),
-            confidence=float(data.get("confidence", 0.5)),
-            supporting_evidence=data.get("supporting_evidence", []),
-            recommended_actions=actions,
-            github_search_terms=data.get("github_search_terms", []),
+        rca_data: dict[str, Any] = {
+            "summary": data.get("summary", ""),
+            "root_cause": data.get("root_cause", ""),
+            "confidence": float(data.get("confidence", 0.5)),
+            "supporting_evidence": data.get("supporting_evidence", []),
+            "recommended_actions": actions,
+            "github_search_terms": data.get("github_search_terms", []),
+        }
+        if "log_evidence" in data:
+            rca_data["log_evidence"] = _parse_log_evidence(data["log_evidence"])
+
+        return RCAResult(**rca_data)
+
+
+def _parse_log_evidence(value: Any) -> list[LogEvidence]:
+    if not isinstance(value, list):
+        return []
+
+    evidence: list[LogEvidence] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+
+        message = str(item.get("message", "")).strip()
+        if not message:
+            continue
+
+        raw_labels = item.get("labels", {})
+        labels = (
+            {str(key): str(val) for key, val in raw_labels.items()}
+            if isinstance(raw_labels, dict)
+            else {}
         )
+
+        evidence.append(
+            LogEvidence(
+                timestamp=_parse_optional_datetime(item.get("timestamp")),
+                severity=str(item.get("severity", "")),
+                message=message,
+                relevance=str(item.get("relevance", "")),
+                labels=labels,
+            )
+        )
+    return evidence
+
+
+def _parse_optional_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 # ------------------------------------------------------------------

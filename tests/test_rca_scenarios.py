@@ -15,13 +15,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from aggregator.core.rca_analyzer import RCAAnalyzer, extract_stack_frames
 from aggregator.clients.github import GitHubLinker, _blob_url, _normalise_path
-from aggregator.models.query import TimeWindow
 from aggregator.models.result import QueryMeta, UnifiedResult
 from aggregator.models.rca import RCAResult
 from aggregator.models.signals import (
@@ -222,7 +221,6 @@ class TestScenario1_ConnectionPoolExhaustion:
         assert any("pool.py" in p for p in paths)
 
         linker = GitHubLinker(token="test", repo=REPO, default_branch=BRANCH)
-        rca = RCAResult(performed=True, github_search_terms=["acquire"])
         enriched = linker._link_stack_frames(result.logs)
 
         assert any("pool.py" in ref.path for ref in enriched)
@@ -351,11 +349,14 @@ class TestScenario2_CascadingLatency:
 
     @pytest.mark.asyncio
     async def test_rca_skips_when_no_error_signals(self):
-        """RCA should not run when the service is merely slow but produces no errors."""
+        """RCA should not run when no error or latency signal is present."""
         result = self._build_result()
-        # Override: no error logs, no error traces, no metric spike
+        # Override: no error logs, no error traces, no latency or error metric spike.
         result.logs = _logs(*[_info_log(f"ok {i}") for i in range(5)])
         result.metrics = _metrics(_series("http_error_rate", 0.0))
+        result.traces = _traces_with_error("GET /api", duration_ms=100.0)
+        result.traces.traces[0].spans[0].is_error = False
+        result.traces.compute_stats()
 
         analyzer = RCAAnalyzer(api_key="test-key")
         rca = await analyzer.analyze(result)
@@ -653,6 +654,36 @@ class TestHelpers:
         result = analyzer._parse_response(raw)
         assert result.summary == "Fence test"
 
+    def test_rca_parse_accepts_log_evidence(self):
+        analyzer = RCAAnalyzer(api_key="test")
+        raw = _llm_response(
+            log_evidence=[
+                {
+                    "timestamp": "2026-05-02T19:12:34Z",
+                    "severity": "error",
+                    "message": "DatabaseConnectionError: connection pool exhausted",
+                    "relevance": "The log names the exhausted resource",
+                    "labels": {"service": "service-b"},
+                }
+            ]
+        )
+        result = analyzer._parse_response(raw)
+
+        assert (
+            result.log_evidence[0].message
+            == "DatabaseConnectionError: connection pool exhausted"
+        )
+        assert result.log_evidence[0].labels["service"] == "service-b"
+        assert "log_evidence" in result.model_fields_set
+
+    def test_rca_parse_preserves_explicit_empty_log_evidence(self):
+        analyzer = RCAAnalyzer(api_key="test")
+        raw = _llm_response(log_evidence=[])
+        result = analyzer._parse_response(raw)
+
+        assert result.log_evidence == []
+        assert "log_evidence" in result.model_fields_set
+
     def test_rca_parse_handles_missing_optional_fields(self):
         analyzer = RCAAnalyzer(api_key="test")
         minimal = json.dumps({
@@ -663,4 +694,6 @@ class TestHelpers:
         result = analyzer._parse_response(minimal)
         assert result.summary == "Minimal"
         assert result.supporting_evidence == []
+        assert result.log_evidence == []
+        assert "log_evidence" not in result.model_fields_set
         assert result.github_search_terms == []

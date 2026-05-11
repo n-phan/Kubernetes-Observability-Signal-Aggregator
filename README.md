@@ -29,6 +29,10 @@ error spike that coincides with a log burst). Optionally, the correlated signals
 to an LLM for root cause analysis. Notable queries are recorded so a recurring failure mode
 can be distinguished from a brand-new one ("has this happened before?").
 
+RCA can also run through an optional Hermes OpenAI-compatible agent. Recent RCA updates add
+structured log evidence, suspicious telemetry-gap events, and a scoped follow-up chat after
+analysis completes.
+
 Four demo microservices generate realistic signals. `service-a` and `service-b` are always
 present: `service-b` is intentionally flaky, with failure modes controllable via the
 in-browser **⚙ Demo** panel; `service-a` calls `service-b` and shows how downstream failures
@@ -66,10 +70,13 @@ Open **http://localhost:8081**.
   reasons, via `kube-state-metrics`).
 - **Query results** — per signal:
   - **Recurrence banner** — "seen N times before" / "first occurrence — new failure mode".
-  - **Root Cause Analysis** — the LLM hypothesis, confidence, recommended actions, and
-    GitHub code references. Its **supporting evidence** items are clickable: clicking one
-    scrolls to (and flashes) the matching Metrics / Logs / Traces row that backs it.
-  - **Correlations** — cross-signal events the rule engine detected.
+  - **Root Cause Analysis** — the LLM hypothesis, confidence, recommended actions, GitHub
+    code references, and (when log lines support the conclusion) a structured Logs evidence
+    section. Its **supporting evidence** items are clickable: clicking one scrolls to (and
+    flashes) the matching Metrics / Logs / Traces row that backs it. After RCA completes, a
+    **follow-up chat** lets you ask incident-scoped questions (Hermes, falling back to Anthropic).
+  - **Correlations** — cross-signal events the rule engine detected, including suspicious
+    telemetry gaps (traffic with no matching logs/traces).
   - **Metrics** — a table of series, each with an inline sparkline.
   - **Logs / Traces** — paginated, filterable; multi-line tracebacks merged into one entry.
 
@@ -78,9 +85,10 @@ Open **http://localhost:8081**.
 ## Prerequisites
 
 - Docker Desktop (includes `docker compose`)
-- An Anthropic API key — required for the "Analyze with AI" button (get one at
-  https://console.anthropic.com). You can also enter it in the UI's **Config LLM** panel
-  instead of `.env`.
+- An Anthropic API key — required for the "Analyze with AI" button in the default RCA mode
+  (get one at https://console.anthropic.com). You can also enter it in the UI's
+  **Config LLM** panel instead of `.env`. (Optionally, use Hermes as the RCA agent
+  instead — see [Quick start](#1-clone-and-configure).)
 - A GitHub personal access token — optional, enables code-reference links in RCA results
   (`repo:read` scope is enough)
 - Free host ports: **8001–8004, 8080, 8081, 9090, 3100, 16686** (see [Ports](#ports); on
@@ -102,14 +110,34 @@ cp .env.example .env
 Open `.env` and set:
 
 ```
-# Enables the "Analyze with AI" button. (Alternatively, leave this blank and
-# enter your key in the UI's Setting → Config LLM panel.)
+# Enables the "Analyze with AI" button in the default RCA mode. (Alternatively,
+# leave this blank and enter your key in the UI's Setting → Config LLM panel.)
 ANTHROPIC_API_KEY=sk-ant-api03-...
+
+# Optional — use Hermes as the RCA agent instead of the one-shot Anthropic path.
+# Start a Hermes OpenAI-compatible API server separately, then set:
+RCA_MODE=hermes
+HERMES_API_URL=http://host.docker.internal:8642/v1
+HERMES_API_KEY=YOUR_API_KEY
+HERMES_MODEL=hermes-agent
+HERMES_TOOLS_ENABLED=true
+HERMES_INVESTIGATION_MODE=tools_first
+HERMES_TIMEOUT_SECONDS=90
+HERMES_MAX_TOOL_ROUNDS=4
+HERMES_MAX_TOOL_CALLS=8
+HERMES_TOOL_LOOKBACK_MAX_MINUTES=120
 
 # Optional — adds a "Code references" section to RCA results with GitHub links.
 # Per-service repos live in infra/service-registry.yml; GITHUB_REPO is the fallback.
 GITHUB_TOKEN=github_pat_...
 ```
+
+`ANTHROPIC_API_KEY` is the only required setting for the default RCA mode (or set it later
+in the UI's Config LLM panel). To use Hermes, run a Hermes OpenAI-compatible API server and
+set `RCA_MODE=hermes` — Hermes first calls the aggregator's overview tool, then can call
+read-only metrics / logs / traces / correlation tools for drill-down evidence; if Hermes is
+unavailable it falls back to the default one-shot RCA. The GitHub integration is optional —
+RCA produces a full analysis without it.
 
 ### 2. Start the stack
 
@@ -180,9 +208,11 @@ scripts needed.
 | DB connection lost | service-d | Two-frame call-chain exception, custom error counter |
 | Resilience comparison | service-a / service-b | Retry / circuit-breaker effect on error propagation |
 
-Each scenario fires a burst of requests, then stops. Pick the target in the sidebar
-**Service** list and click **Query** (then **⚡ Analyze with AI**). The Demo panel's **Reset**
-button restores all services to their default (no-failure) state.
+Each scenario fires a burst of requests, then stops, and records the exact
+`window_start`/`window_end`. Pick the target in the sidebar **Service** list and click
+**Query** — the UI scopes the result to that run's window — then **⚡ Analyze with AI**
+(which reuses the same window). The Demo panel's **Reset** button restores all services to
+their default (no-failure) state.
 
 ---
 
@@ -228,6 +258,28 @@ target shows that service's pods.
 
 ---
 
+## RCA follow-up and tools
+
+The **Analyze with AI** button reruns the last query with `include_rca=true`. RCA now runs
+for errors, high latency, and suspicious telemetry absence events such as traffic without
+matching logs or traces. RCA output can include a structured **Logs** evidence section when
+error or warning log lines directly support the conclusion.
+
+When `RCA_MODE=hermes`, Hermes can run in `tools_first` mode: it is instructed to call the
+aggregate observability overview first, then use read-only metrics, logs, traces, or
+correlation tools only when it needs more evidence. The same read-only tool set is exposed
+through the local MCP bridge:
+
+```bash
+AGGREGATOR_API_URL=http://localhost:8080 python -m aggregator.mcp_observability_server
+```
+
+After a completed RCA, the RCA panel shows a follow-up chat for incident-scoped questions.
+Follow-up uses Hermes first and falls back to Anthropic when Hermes is unavailable and
+`ANTHROPIC_API_KEY` is configured.
+
+---
+
 ## Project structure
 
 ```
@@ -235,9 +287,16 @@ target shows that service's pods.
 ├── aggregator/               FastAPI backend — see aggregator/README.md
 │   ├── cluster.py            GET /cluster/status — node-exporter + pod status
 │   ├── history.py            GET /history + query-history recording (SQLite)
-│   ├── core/                 orchestrator, correlator, RCA analyzer
+│   ├── mcp_observability_server.py  read-only MCP bridge for Hermes
 │   ├── clients/              Prometheus / Loki / Jaeger / GitHub clients
-│   └── models/               request & result data shapes
+│   ├── models/               request & result data shapes
+│   └── core/
+│       ├── aggregator.py     orchestrator (fan-out + correlate + RCA)
+│       ├── correlator.py     cross-signal rule engine
+│       ├── rca_analyzer.py   one-shot Anthropic RCA
+│       ├── hermes_rca_agent.py      optional Hermes RCA agent (tools)
+│       ├── rca_followup.py          RCA follow-up assistant
+│       └── suspicious_absence.py    telemetry-gap detector
 │
 ├── demo/
 │   ├── service-a/            Upstream API (8001) — retry / circuit-breaker logic
@@ -279,11 +338,13 @@ pip install -e ".[dev]"
 pytest                        # -v for verbose, -x to stop on first failure
 ```
 
-`tests/test_aggregator.py` covers the correlator rules, fan-out behavior, `TimeWindow`
-validation, and the Loki multiline-merging / severity-detection helpers.
-`tests/test_rca_scenarios.py` covers the RCA pipeline across several failure scenarios with
-mocked Anthropic responses. `tests/test_services.py` covers the service-registration
-endpoints.
+`tests/test_aggregator.py` covers the correlator rules, the aggregator's fan-out behavior,
+suspicious-absence events, Hermes RCA behavior, RCA follow-up, `TimeWindow` validation, and
+the Loki multiline-merging / severity-detection helpers. `tests/test_rca_scenarios.py`
+covers the RCA pipeline across failure scenarios with mocked model responses.
+`tests/test_services.py` covers the service-registration endpoints,
+`tests/test_mcp_observability_server.py` the read-only MCP bridge, and `tests/test_demo.py`
+the demo scenario query-window events.
 
 ---
 
@@ -295,10 +356,16 @@ first. If the sidebar **Service** list is empty, wait a few seconds and reload (
 populated from `prometheus.yml` locally, or a ConfigMap in Kubernetes mode).
 
 **"Analyze with AI" shows an error or does nothing**
-No Anthropic key configured — set `ANTHROPIC_API_KEY` in `.env` (then `docker compose up -d
-aggregator` to reload), or enter the key in the UI's **Config LLM** panel. The RCA panel
-shows the error inline. If the "Code references" section is missing, `GITHUB_TOKEN` isn't
-set (optional); code references only appear for scenarios that produce Python tracebacks.
+In default RCA mode, `ANTHROPIC_API_KEY` is missing/invalid in `.env` (then `docker compose
+up -d aggregator` to reload) — or set it in the UI's **Config LLM** panel. In `RCA_MODE=hermes`,
+check that `HERMES_API_URL` points at a running Hermes server. The RCA panel shows the error
+inline; metrics/logs/traces still work regardless. If the "Code references" section is
+missing or shows "No matches found", `GITHUB_TOKEN` isn't set (optional) — code references
+only appear in scenarios that produce Python tracebacks (e.g. the crash scenario).
+
+**Follow-up chat fails**
+Follow-up requires a completed RCA first. Hermes is the primary follow-up provider; if it's
+unavailable, the Anthropic fallback only works when `ANTHROPIC_API_KEY` is configured.
 
 **`port is already allocated` / `ports are not available`**
 Another process holds one of the ports, or (on Windows) it's in a reserved range — see
@@ -309,4 +376,4 @@ Its health-check uses `wget`, which isn't in the `python:3.11-slim` image — co
 API works fine (`curl http://localhost:8080/health`).
 
 **Stack is slow or containers keep restarting**
-Nine containers run at once. On machines with under ~8 GB RAM, close other apps first.
+A dozen-ish containers run at once. On machines with under ~8 GB RAM, close other apps first.
