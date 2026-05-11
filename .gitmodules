@@ -1,0 +1,6 @@
+[submodule "demo/service-c"]
+	path = demo/service-c
+	url = https://github.com/n-phan/service-c
+[submodule "demo/service-d"]
+	path = demo/service-d
+	url = https://github.com/n-phan/service-d
