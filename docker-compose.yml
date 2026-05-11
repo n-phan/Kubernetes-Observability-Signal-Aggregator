@@ -110,12 +110,12 @@ services:
       # Retry failed requests to service-b up to 3 times with exponential backoff.
       # "false" = errors from service-b propagate immediately to the caller.
       # "true"  = up to 3 attempts before giving up (0.2s, 0.4s, 0.8s backoff).
-      ENABLE_RETRY: "false"
+      ENABLE_RETRY: "true"
 
       # Stop calling service-b after 5 consecutive errors (circuit opens).
       # Returns HTTP 503 immediately without touching service-b for 30 seconds,
       # then automatically retries (half-open). Good to demo alongside FAILURE_RATE.
-      ENABLE_CIRCUIT_BREAKER: "false"
+      ENABLE_CIRCUIT_BREAKER: "true"
     depends_on:
       service-b:
         condition: service_healthy
@@ -284,10 +284,25 @@ services:
       - ./infra:/app/infra:rw
       - obs_aggregator_history_data:/app/data
     env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       PROMETHEUS_URL: http://prometheus:9090
       LOKI_URL: http://loki:3100
       JAEGER_URL: http://jaeger:16686
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      RCA_MODE: "${RCA_MODE:-simple}"
+      HERMES_API_URL: "${HERMES_API_URL:-http://host.docker.internal:8642/v1}"
+      HERMES_API_KEY: "${HERMES_API_KEY:-}"
+      HERMES_MODEL: "${HERMES_MODEL:-hermes-agent}"
+      HERMES_TIMEOUT_SECONDS: "${HERMES_TIMEOUT_SECONDS:-90}"
+      HERMES_TOOLS_ENABLED: "${HERMES_TOOLS_ENABLED:-true}"
+      HERMES_INVESTIGATION_MODE: "${HERMES_INVESTIGATION_MODE:-tools_first}"
+      HERMES_MAX_TOOL_ROUNDS: "${HERMES_MAX_TOOL_ROUNDS:-4}"
+      HERMES_MAX_TOOL_CALLS: "${HERMES_MAX_TOOL_CALLS:-8}"
+      HERMES_TOOL_LOOKBACK_MAX_MINUTES: "${HERMES_TOOL_LOOKBACK_MAX_MINUTES:-120}"
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      GITHUB_REPO: "${GITHUB_REPO:-}"
       LOG_LEVEL: info
     depends_on:
       prometheus:

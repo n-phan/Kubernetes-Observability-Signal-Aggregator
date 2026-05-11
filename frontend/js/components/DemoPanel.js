@@ -414,13 +414,16 @@
       case 'done': {
         const summary = `Done — ${event.success} ok, ${event.failed} failed out of ${event.total} requests`;
         _appendLog(summary, 'done');
+        if (window.setDemoQueryWindow) {
+          window.setDemoQueryWindow(event);
+        }
 
         // Show a hint pointing at the correct query target
         const hint = $('demo-hint');
         if (hint) {
           hint.style.display = 'block';
           hint.textContent =
-            `→ Query "${event.query_target}" in the main UI above to see the signals.`;
+            `→ Query "${event.query_target}" in the main UI above to see this run's signals.`;
         }
         break;
       }

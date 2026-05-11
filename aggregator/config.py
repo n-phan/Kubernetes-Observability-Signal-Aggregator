@@ -1,4 +1,4 @@
-from pydantic import HttpUrl, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     # RCA — Anthropic
     anthropic_api_key: str | None = None
     rca_enabled: bool = True
+    rca_mode: str = "simple"  # simple | hermes
+
+    # RCA — Hermes agent API server
+    hermes_api_url: str = "http://localhost:8642/v1"
+    hermes_api_key: str | None = None
+    hermes_model: str = "hermes-agent"
+    hermes_timeout_seconds: float = 90.0
+    hermes_tools_enabled: bool = True
+    hermes_investigation_mode: str = "tools_first"  # dossier | tools_first
+    hermes_max_tool_rounds: int = 4
+    hermes_max_tool_calls: int = 8
+    hermes_tool_lookback_max_minutes: int = 120
 
     # RCA — GitHub
     github_token: str | None = None
@@ -85,10 +97,26 @@ class Settings(BaseSettings):
     watchdog_lookback_minutes: int = 15
     watchdog_anomaly_threshold: float = 0.7  # confidence threshold (0.0-1.0)
 
-    @field_validator("prometheus_url", "loki_url", "jaeger_url", mode="before")
+    @field_validator("prometheus_url", "loki_url", "jaeger_url", "hermes_api_url", mode="before")
     @classmethod
     def strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @field_validator("rca_mode", mode="before")
+    @classmethod
+    def validate_rca_mode(cls, v: str) -> str:
+        mode = (v or "simple").lower()
+        if mode not in {"simple", "hermes"}:
+            raise ValueError("RCA_MODE must be either 'simple' or 'hermes'")
+        return mode
+
+    @field_validator("hermes_investigation_mode", mode="before")
+    @classmethod
+    def validate_hermes_investigation_mode(cls, v: str) -> str:
+        mode = (v or "tools_first").lower()
+        if mode not in {"dossier", "tools_first"}:
+            raise ValueError("HERMES_INVESTIGATION_MODE must be either 'dossier' or 'tools_first'")
+        return mode
 
 
 # Module-level singleton — import this everywhere
