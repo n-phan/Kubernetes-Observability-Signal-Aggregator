@@ -453,14 +453,9 @@
       const visible = section.classList.toggle('visible');
       const btn = $('btn-demo');
       if (btn) btn.classList.toggle('active', visible);
-      if (visible) {
-        // close Services panel if open
-        const spSec = document.getElementById('sp-section');
-        if (spSec && spSec.classList.contains('visible')) {
-          window.ServicePanel && window.ServicePanel.toggle();
-        }
-        this.refreshConfig();
-      }
+      if (visible && typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels('demo');
+      if (typeof Sidebar !== 'undefined') Sidebar.syncClusterBar();
+      if (visible) this.refreshConfig();
     },
 
     async refreshConfig() {

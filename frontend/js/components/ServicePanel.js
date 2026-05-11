@@ -747,15 +747,9 @@
     const isOpen = sec.classList.toggle('visible');
     const btn = document.getElementById('btn-services');
     if (btn) btn.classList.toggle('active', isOpen);
-    // Hide the cluster-status bar while this panel takes over the content area.
-    const clusterBar = document.getElementById('cluster-bar');
-    if (clusterBar) clusterBar.style.display = isOpen ? 'none' : '';
+    if (isOpen && typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels('service');
+    if (typeof Sidebar !== 'undefined') Sidebar.syncClusterBar();
     if (isOpen) {
-      // close Demo panel if open
-      const demoSec = document.getElementById('demo-section');
-      if (demoSec && demoSec.classList.contains('visible')) {
-        window.DemoPanel && window.DemoPanel.toggle();
-      }
       _showTab('registered');
     } else {
       _resetWizard();

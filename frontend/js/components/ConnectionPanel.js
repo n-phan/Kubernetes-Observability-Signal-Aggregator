@@ -100,18 +100,9 @@ const ConnectionPanel = {
 
   toggle() {
     this.init();
-    const sec = document.getElementById('connection-section');
-    const open = sec.classList.toggle('visible');
-    const cb = document.getElementById('cluster-bar');
-    if (cb) cb.style.display = open ? 'none' : '';
-    if (open) {
-      const sp = document.getElementById('sp-section');
-      if (sp && sp.classList.contains('visible') && window.ServicePanel) ServicePanel.toggle();
-      const demo = document.getElementById('demo-section');
-      if (demo && demo.classList.contains('visible') && window.DemoPanel) DemoPanel.toggle();
-      if (window.LlmConfigPanel && LlmConfigPanel.isOpen()) LlmConfigPanel.toggle();
-      if (window.HistoryListPanel && HistoryListPanel.isOpen()) HistoryListPanel.toggle();
-    }
+    const open = document.getElementById('connection-section').classList.toggle('visible');
+    if (open && typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels('connection');
+    if (typeof Sidebar !== 'undefined') Sidebar.syncClusterBar();
   },
 };
 

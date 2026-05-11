@@ -82,20 +82,32 @@ const Sidebar = {
     if (btn) btn.textContent = collapsed ? '»' : '«';
   },
 
-  // True if a content-area panel (Manage services / Connection / Config LLM / History) is open.
+  // The content-area panels that take over the right-hand side. Only one should
+  // ever be visible at a time — each panel's toggle() calls closeOtherPanels()
+  // when opening, and the sidebar nav calls it (with no exception) to back out.
+  _CONTENT_PANELS: [
+    { name: 'service',    isOpen: () => { const s = document.getElementById('sp-section'); return !!(s && s.classList.contains('visible')); }, close: () => window.ServicePanel    && ServicePanel.toggle()    },
+    { name: 'demo',       isOpen: () => { const s = document.getElementById('demo-section'); return !!(s && s.classList.contains('visible')); }, close: () => window.DemoPanel       && DemoPanel.toggle()       },
+    { name: 'connection', isOpen: () => !!(window.ConnectionPanel  && ConnectionPanel.isOpen()),  close: () => ConnectionPanel.toggle()  },
+    { name: 'llm',        isOpen: () => !!(window.LlmConfigPanel   && LlmConfigPanel.isOpen()),   close: () => LlmConfigPanel.toggle()   },
+    { name: 'history',    isOpen: () => !!(window.HistoryListPanel && HistoryListPanel.isOpen()), close: () => HistoryListPanel.toggle() },
+  ],
+
+  // True if any content-area panel is open.
   _panelOpen() {
-    const sp = document.getElementById('sp-section');
-    return !!((sp && sp.classList.contains('visible'))
-           || (window.ConnectionPanel && ConnectionPanel.isOpen())
-           || (window.LlmConfigPanel && LlmConfigPanel.isOpen())
-           || (window.HistoryListPanel && HistoryListPanel.isOpen()));
+    return this._CONTENT_PANELS.some(p => p.isOpen());
   },
-  _closePanels() {
-    const sp = document.getElementById('sp-section');
-    if (sp && sp.classList.contains('visible') && window.ServicePanel) ServicePanel.toggle();
-    if (window.ConnectionPanel && ConnectionPanel.isOpen()) ConnectionPanel.toggle();
-    if (window.LlmConfigPanel && LlmConfigPanel.isOpen()) LlmConfigPanel.toggle();
-    if (window.HistoryListPanel && HistoryListPanel.isOpen()) HistoryListPanel.toggle();
+  // Close every content panel except the named one (pass null to close all).
+  closeOtherPanels(except) {
+    this._CONTENT_PANELS.forEach(p => { if (p.name !== except && p.isOpen()) p.close(); });
+  },
+  _closePanels() { this.closeOtherPanels(null); },
+  // The homepage Cluster Status bar is hidden whenever a content panel is taking
+  // over the right-hand side. Every panel's toggle() calls this so the bar's
+  // visibility always reflects the real state, regardless of toggle order.
+  syncClusterBar() {
+    const cb = document.getElementById('cluster-bar');
+    if (cb) cb.style.display = this._panelOpen() ? 'none' : '';
   },
 
   toggleItem(key) {

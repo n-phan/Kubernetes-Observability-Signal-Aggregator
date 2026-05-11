@@ -83,17 +83,9 @@ const LlmConfigPanel = {
   // ── Open / close ────────────────────────────────────────────────────────
   toggle() {
     this._build();
-    const sec = document.getElementById('llm-section');
-    const open = sec.classList.toggle('visible');
-    // Hide the cluster bar and any other content panel while this is open.
-    const cb = document.getElementById('cluster-bar');
-    if (cb) cb.style.display = open ? 'none' : '';
-    if (open) {
-      const sp = document.getElementById('sp-section');
-      if (sp && sp.classList.contains('visible') && window.ServicePanel) ServicePanel.toggle();
-      const demo = document.getElementById('demo-section');
-      if (demo && demo.classList.contains('visible') && window.DemoPanel) DemoPanel.toggle();
-    }
+    const open = document.getElementById('llm-section').classList.toggle('visible');
+    if (open && typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels('llm');
+    if (typeof Sidebar !== 'undefined') Sidebar.syncClusterBar();
   },
 
   isOpen() {

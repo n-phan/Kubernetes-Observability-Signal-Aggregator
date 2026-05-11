@@ -85,17 +85,10 @@ const HistoryListPanel = {
 
   toggle() {
     this._build();
-    const sec = document.getElementById('history-section');
-    const open = sec.classList.toggle('visible');
-    const cb = document.getElementById('cluster-bar');
-    if (cb) cb.style.display = open ? 'none' : '';
+    const open = document.getElementById('history-section').classList.toggle('visible');
+    if (open && typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels('history');
+    if (typeof Sidebar !== 'undefined') Sidebar.syncClusterBar();
     if (open) {
-      // Close the other content-area panels.
-      const sp = document.getElementById('sp-section');
-      if (sp && sp.classList.contains('visible') && window.ServicePanel) ServicePanel.toggle();
-      const demo = document.getElementById('demo-section');
-      if (demo && demo.classList.contains('visible') && window.DemoPanel) DemoPanel.toggle();
-      if (window.LlmConfigPanel && LlmConfigPanel.isOpen()) LlmConfigPanel.toggle();
       this._syncTargetOptions();
       this.refresh();
     }
