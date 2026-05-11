@@ -18,51 +18,31 @@
 
 <body>
 
+    <aside id="sidebar"></aside>
+
     <header>
-        <div class="logo">
-            <div class="logo-icon">
-                <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="16" cy="16" r="14" stroke="#3dffa0" stroke-width="1.5" stroke-dasharray="4 2" />
-                    <circle cx="16" cy="16" r="7" stroke="#38d4f5" stroke-width="1" />
-                    <circle cx="16" cy="16" r="2" fill="#3dffa0" />
-                    <line x1="16" y1="2" x2="16" y2="8" stroke="#3dffa0" stroke-width="1.5" />
-                    <line x1="16" y1="24" x2="16" y2="30" stroke="#3dffa0" stroke-width="1.5" />
-                    <line x1="2" y1="16" x2="8" y2="16" stroke="#3dffa0" stroke-width="1.5" />
-                    <line x1="24" y1="16" x2="30" y2="16" stroke="#3dffa0" stroke-width="1.5" />
-                </svg>
-            </div>
-            <div>
-                <div class="logo-text">OBS // AGGREGATOR</div>
-                <div class="logo-sub">K8s Signal Intelligence</div>
-            </div>
-        </div>
+        <!-- Target is picked from the sidebar → Service list (inp-target below is
+             a hidden holder for the current selection). API Endpoint / Namespace
+             live in the sidebar Setting item. -->
+        <select id="inp-target" hidden></select>
 
         <div class="query-bar">
             <div class="field">
                 <label>Target</label>
-                <select id="inp-target" style="width:clamp(120px,18vw,200px)">
-                    <option value="" disabled selected>Select a service…</option>
-                </select>
-            </div>
-            <div class="field">
-                <label>Namespace</label>
-                <input id="inp-namespace" type="text" value="default" placeholder="default" />
+                <span id="target-label" class="target-label">— pick in sidebar ▸ Service</span>
             </div>
             <div class="field" id="field-lookback">
                 <label>Lookback (min)</label>
                 <input id="inp-lookback" type="number" value="30" min="1" max="1440" />
             </div>
-            <div class="field">
-                <label>API Endpoint</label>
-                <input id="inp-endpoint" type="text" value="http://localhost:8080" />
-            </div>
             <button class="btn-query" id="btn-query" onclick="runQuery()">▶ Query</button>
             <button class="btn-mock"  id="btn-mock"  onclick="runMock()">⊡ Mock</button>
             <button class="btn-mock"  id="btn-demo"  onclick="DemoPanel.toggle()">⚙ Demo</button>
-            <button class="btn-mock"  id="btn-services" onclick="ServicePanel.toggle()">☰ Services</button>
             <div class="status-dot" id="status-dot"></div>
         </div>
     </header>
+
+    <section id="cluster-bar"></section>
 
     <main id="main">
         <div class="empty-state">
@@ -83,7 +63,14 @@
     components/MetricsPanel.js   → Prometheus metric series table
     components/LogsPanel.js      → paginated, filterable Loki log lines
     components/TracesPanel.js    → paginated, filterable Jaeger traces
+    components/ClusterStatusPanel.js → homepage CPU/memory/disk gauges
+    components/Sidebar.js        → left navigation rail (Service / History / Setting)
+    components/LlmConfigPanel.js → Settings → Config LLM form
+    components/ConnectionPanel.js → Settings → API Endpoint & Namespace form
+    components/HistoryPanel.js   → recurrence banner + browsable query history
 
+    evidence.js              → makes RCA "supporting evidence" items jump to the
+                               matching Metrics / Logs / Traces row
     api.js                   → fetch calls, instantiates the components above
 -->
     <script src="js/config.js"></script>
@@ -97,15 +84,26 @@
     <script src="js/components/TracesPanel.js"></script>
     <script src="js/components/DemoPanel.js"></script>
     <script src="js/components/ServicePanel.js"></script>
+    <script src="js/components/ClusterStatusPanel.js"></script>
+    <script src="js/components/LlmConfigPanel.js"></script>
+    <script src="js/components/ConnectionPanel.js"></script>
+    <script src="js/components/HistoryPanel.js"></script>
+    <script src="js/components/Sidebar.js"></script>
 
+    <script src="js/evidence.js"></script>
     <script src="js/api.js"></script>
 
     <script>
       // Initialise panels after all components and api.js are loaded.
+      // ConnectionPanel.init() goes first — it creates #inp-endpoint / #inp-namespace,
+      // which the other panels read on startup.
+      ConnectionPanel.init();
+      Sidebar.init();
       DemoPanel.init();
       ServicePanel.init();
+      ClusterStatusPanel.init();
 
-      // Populate the target <select> from Prometheus job labels on load,
+      // Populate the target <select> from the aggregator's /services on load,
       // and again whenever the endpoint changes or a service is registered.
       async function loadServices() {
         const endpoint = $('inp-endpoint').value.trim().replace(/\/$/, '');
@@ -114,16 +112,13 @@
           const resp = await fetch(`${endpoint}/services`);
           if (!resp.ok) return;
           const services = await resp.json();
-          // Preserve current selection if still in list
           const current = sel.value;
           sel.innerHTML = '<option value="" disabled>Select a service…</option>'
             + services.map(s => `<option value="${escHtml(s)}"${s === current ? ' selected' : ''}>${escHtml(s)}</option>`).join('');
-          // If nothing selected, default to placeholder
           if (!sel.value) sel.value = '';
         } catch (_) {}
       }
       loadServices();
-      $('inp-endpoint').addEventListener('change', loadServices);
     </script>
 
 </body>

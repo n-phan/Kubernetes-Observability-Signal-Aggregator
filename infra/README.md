@@ -199,6 +199,25 @@ individual traces and their spans during development.
 
 ---
 
+### node-exporter
+
+**What it does:** Exposes host-level metrics (CPU, memory, load, filesystems, network) on
+`:9100/metrics`. Prometheus scrapes it as the `node` job; the aggregator's
+`GET /cluster/status` summarizes those metrics for the homepage **Cluster Status** panel.
+
+**Port:** `9100` (container only — not published to the host; Prometheus reaches it over
+the Docker network)  
+**Config:** none — command-line flags only (`--path.procfs` / `--path.sysfs` /
+`--path.rootfs` so it reads the host's `/proc`, `/sys`, `/` rather than the container's;
+see `docker-compose.yml`).
+
+> In a real Kubernetes cluster, `kube-prometheus-stack` runs `node-exporter` as a DaemonSet
+> (one per node) plus `kube-state-metrics` for pod↔node mapping, so the Cluster Status panel
+> can show real per-node resources and per-pod status. See the repo root README's
+> *Deploying to Kubernetes* section and the `k8s/` manifests.
+
+---
+
 ### Nginx (frontend)
 
 **What it does:** Serves the static frontend files (HTML, CSS, JS) on port 8081.
@@ -270,13 +289,16 @@ container restart required.
 
 | Service | Host port | Purpose |
 |---|---|---|
-| service-a | 8001 | Demo upstream API |
-| service-b | 8002 | Demo downstream API (flaky) |
+| service-a | 8001 | Demo upstream API (calls service-b) |
+| service-b | 8002 | Demo downstream API (flaky — all failure injection here) |
+| service-c | 8003 | Demo payment processor |
+| service-d | 8004 | Demo inventory service |
 | aggregator | 8080 | Observability query API |
 | frontend | 8081 | Web UI |
 | Prometheus | 9090 | Metrics storage + UI |
 | Loki | 3100 | Log storage API |
 | Jaeger | 16686 | Trace storage + UI |
+| node-exporter | — | Host metrics (`:9100`, not published — Prometheus scrapes it internally) |
 
 Prometheus and Jaeger each have their own web UIs accessible at their respective ports,
 which can be useful when debugging what data is actually being collected.

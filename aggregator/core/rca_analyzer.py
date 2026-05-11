@@ -21,6 +21,7 @@ import httpx
 
 from aggregator.core.rca_gate import should_run_rca
 from aggregator.core.suspicious_absence import is_suspicious_absence_event
+from aggregator.models.query import LlmConfig
 from aggregator.models.rca import LogEvidence, RCAResult, RecommendedAction
 from aggregator.models.result import UnifiedResult
 from aggregator.models.signals import LogLine, Severity, Span
@@ -29,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-4-6"
+
+# Providers the analyzer can actually talk to today. Anything else → RCA skipped.
+_SUPPORTED_PROVIDERS = frozenset({"anthropic", "claude"})
 
 # How many items to include in the prompt — keeps token count predictable
 MAX_LOG_SAMPLES = 20
@@ -50,25 +54,40 @@ class RCAAnalyzer:
         self._repo = repo
         self._client = httpx.AsyncClient(timeout=60.0)
 
-    async def analyze(self, result: UnifiedResult) -> RCAResult:
+    async def analyze(self, result: UnifiedResult, llm: LlmConfig | None = None) -> RCAResult:
         """
         Run root cause analysis on a UnifiedResult.
-        Returns RCAResult(performed=False) if there is nothing to analyze
-        or if the API call fails.
+
+        `llm` is an optional per-request override (from the frontend Config LLM
+        panel). When provided, its provider must be Anthropic/Claude — other
+        providers cause RCA to be skipped with an explanatory error. Its
+        api_key / model / endpoint, when set, override the server defaults.
+
+        Returns RCAResult(performed=False) if there is nothing to analyze,
+        the provider is unsupported, no API key is available, or the API
+        call fails.
         """
         if not self._should_run(result):
             return RCAResult(performed=False)
 
-        if not self._api_key:
-            logger.warning("ANTHROPIC_API_KEY not set — skipping RCA")
-            return RCAResult(
-                performed=False,
-                error="ANTHROPIC_API_KEY not configured",
-            )
+        provider = (llm.provider if llm and llm.provider else "anthropic").strip().lower()
+        if provider not in _SUPPORTED_PROVIDERS:
+            msg = f"LLM provider '{provider}' is not supported yet - only Anthropic"
+            logger.warning(msg)
+            return RCAResult(performed=False, error=msg)
+
+        api_key = (llm.api_key if llm and llm.api_key else self._api_key) or None
+        model   = (llm.model if llm and llm.model else MODEL)
+        url     = (llm.endpoint if llm and llm.endpoint else ANTHROPIC_API_URL)
+
+        if not api_key:
+            msg = "Anthropic API key not configured (set ANTHROPIC_API_KEY, or enter a key in the Config LLM panel)"
+            logger.warning(msg)
+            return RCAResult(performed=False, error=msg)
 
         prompt = self._build_prompt(result)
         try:
-            raw = await self._call_llm(prompt)
+            raw = await self._call_llm(prompt, api_key=api_key, model=model, url=url)
             rca = self._parse_response(raw)
             rca.performed = True
             return rca
@@ -280,17 +299,17 @@ class RCAAnalyzer:
 
         return "\n".join(lines)
 
-    async def _call_llm(self, prompt: str) -> str:
-        """Send the prompt to the Anthropic API and return the text response."""
+    async def _call_llm(self, prompt: str, *, api_key: str, model: str, url: str) -> str:
+        """Send the prompt to the Anthropic Messages API and return the text response."""
         resp = await self._client.post(
-            ANTHROPIC_API_URL,
+            url,
             headers={
-                "x-api-key": self._api_key or "",
+                "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
             json={
-                "model": MODEL,
+                "model": model,
                 "max_tokens": 2048,
                 "messages": [{"role": "user", "content": prompt}],
             },

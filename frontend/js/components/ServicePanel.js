@@ -401,6 +401,7 @@
         const opt = Array.from(sel.options).find(o => o.value === name);
         if (opt) opt.remove();
       }
+      document.dispatchEvent(new CustomEvent('obs:services-changed'));
     } catch (err) {
       const row = document.getElementById(`sp-row-${name}`);
       if (row) {
@@ -534,6 +535,7 @@
       _r('register-msg').className = 'reg-inline-msg ok';
       _r('register-msg').textContent = `✓ "${_name}" registered. Prometheus will scrape it within 15 s.`;
       if (typeof loadServices === 'function') loadServices();
+      document.dispatchEvent(new CustomEvent('obs:services-changed'));
       setTimeout(() => {
         _resetWizard();
         _showTab('registered');
@@ -745,12 +747,9 @@
     const isOpen = sec.classList.toggle('visible');
     const btn = document.getElementById('btn-services');
     if (btn) btn.classList.toggle('active', isOpen);
+    if (isOpen && typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels('service');
+    if (typeof Sidebar !== 'undefined') Sidebar.syncClusterBar();
     if (isOpen) {
-      // close Demo panel if open
-      const demoSec = document.getElementById('demo-section');
-      if (demoSec && demoSec.classList.contains('visible')) {
-        window.DemoPanel && window.DemoPanel.toggle();
-      }
       _showTab('registered');
     } else {
       _resetWizard();

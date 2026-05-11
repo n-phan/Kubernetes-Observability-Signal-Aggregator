@@ -24,3 +24,8 @@ scrape_configs:
   - targets:
     - service-c:8003
   metrics_path: /metrics
+- job_name: node
+  static_configs:
+  - targets:
+    - node-exporter:9100
+  metrics_path: /metrics

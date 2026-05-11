@@ -32,9 +32,12 @@ class MetricsPanel {
         .map(([k, v]) => `${k}=<span style="color:var(--cyan)">${v}</span>`)
         .join(', ');
 
+      const trendValues = (s.samples || []).map(p => p && p.value);
+
       return `
-        <tr>
+        <tr data-metric="${escHtml(s.name || '')}">
           <td>${s.name || '—'}</td>
+          <td class="spark">${sparklineSvg(trendValues)}</td>
           <td class="num">${fmt(s.latest_value)}</td>
           <td class="num">${fmt(s.peak_value)}</td>
           <td class="labels">${labelsHtml || '—'}</td>
@@ -45,7 +48,7 @@ class MetricsPanel {
     const body = `
       <table class="data-table">
         <thead><tr>
-          <th>Metric</th><th>Latest</th><th>Peak</th><th>Labels</th>
+          <th>Metric</th><th>Trend</th><th>Latest</th><th>Peak</th><th>Labels</th>
         </tr></thead>
         <tbody>${rowsHtml}</tbody>
       </table>

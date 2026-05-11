@@ -14,6 +14,7 @@ from pathlib import Path
 
 import yaml
 
+from aggregator import history
 from aggregator.clients.github import GitHubLinker
 from aggregator.clients.jaeger import JaegerClient
 from aggregator.clients.loki import LokiClient
@@ -177,14 +178,17 @@ class SignalAggregator:
 
         # RCA — only runs when explicitly requested and error signals exist
         if request.include_rca and self._rca_analyzer:
-            rca = await self._rca_analyzer.analyze(result)
-            if (
-                self._fallback_rca_analyzer
-                and not rca.performed
-                and rca.error
-            ):
+            # RCAAnalyzer honours the per-request LLM override (Config LLM panel);
+            # HermesRCAAgent does not take it.
+            async def _run_analyzer(analyzer):
+                if isinstance(analyzer, RCAAnalyzer):
+                    return await analyzer.analyze(result, request.llm)
+                return await analyzer.analyze(result)
+
+            rca = await _run_analyzer(self._rca_analyzer)
+            if self._fallback_rca_analyzer and not rca.performed and rca.error:
                 logger.warning("Primary RCA failed; falling back to simple RCA: %s", rca.error)
-                fallback_rca = await self._fallback_rca_analyzer.analyze(result)
+                fallback_rca = await _run_analyzer(self._fallback_rca_analyzer)
                 if fallback_rca.performed:
                     rca = fallback_rca
             if rca.performed:
@@ -195,6 +199,17 @@ class SignalAggregator:
             if rca.performed and "log_evidence" not in rca.model_fields_set:
                 rca.log_evidence = _default_log_evidence(logs)
             result.rca = rca
+
+        # History — record notable queries and attach recurrence info
+        # ("has this happened before?"). Best-effort; never fails the query.
+        notable = (
+            logs.error_count > 0
+            or traces.error_trace_count > 0
+            or bool(correlations)
+            or result.rca.performed
+        )
+        if notable:
+            result.history = await history.record(result)
 
         total_ms = (time.monotonic() - t0) * 1000
         result.meta.total_duration_ms = total_ms

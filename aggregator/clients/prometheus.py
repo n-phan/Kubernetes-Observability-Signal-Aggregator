@@ -9,28 +9,29 @@ from aggregator.models.signals import MetricSample, MetricSeries, MetricsSignal
 logger = logging.getLogger(__name__)
 
 # PromQL expressions to run for every query.
-# Each tuple is (metric_name, promql_template).
-# {target} and {namespace} are substituted at query time.
+# Each tuple is (metric_name, promql_template). {target} is the job/service name;
+# {ns} expands to a namespace label matcher (', namespace="..."') in Kubernetes
+# mode, or to an empty string in docker-compose mode (where there is no such label).
 METRIC_QUERIES: list[tuple[str, str]] = [
     (
         "cpu_usage",
-        'rate(process_cpu_seconds_total{{job="{target}"}}[5m])',
+        'rate(process_cpu_seconds_total{{job="{target}"{ns}}}[5m])',
     ),
     (
         "memory_bytes",
-        'process_resident_memory_bytes{{job="{target}"}}',
+        'process_resident_memory_bytes{{job="{target}"{ns}}}',
     ),
     (
         "http_requests_per_second",
-        'rate(http_requests_total{{job="{target}"}}[5m])',
+        'rate(http_requests_total{{job="{target}"{ns}}}[5m])',
     ),
     (
         "http_error_rate",
-        'rate(http_requests_total{{job="{target}",status=~"5.."}}[5m])',
+        'rate(http_requests_total{{job="{target}",status=~"5.."{ns}}}[5m])',
     ),
     (
         "http_latency_p99",
-        'histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{{job="{target}"}}[5m]))',
+        'histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{{job="{target}"{ns}}}[5m]))',
     ),
 ]
 
@@ -60,8 +61,14 @@ class PrometheusClient(BaseObservabilityClient):
         all_series: list[MetricSeries] = []
         total_duration = 0.0
 
+        # In Kubernetes the Prometheus Operator adds a `namespace` label to every
+        # ServiceMonitor target — scope by it. In docker-compose there is no such
+        # label, so use no namespace filter (namespace == "default" sentinel).
+        ns = (namespace or "").strip()
+        ns_filter = f', namespace="{ns}"' if ns and ns != "default" else ""
+
         for metric_name, query_template in METRIC_QUERIES:
-            query = query_template.format(target=target, namespace=namespace)
+            query = query_template.format(target=target, ns=ns_filter)
             try:
                 series, duration_ms = await self._range_query(
                     query=query,

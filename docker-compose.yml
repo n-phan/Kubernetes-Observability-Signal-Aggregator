@@ -203,6 +203,22 @@ services:
       timeout: 5s
       retries: 5
 
+  # node-exporter — host-level metrics (CPU, memory, disk, load, network).
+  # Prometheus scrapes it as the "node" job; the aggregator's /cluster/status
+  # endpoint queries those metrics for the homepage status panel.
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/host/root'
+      - '--collector.filesystem.mount-points-exclude=^/(host|sys|proc|dev|run)($$|/)'
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+
   loki:
     image: grafana/loki:2.9.6
     ports:
@@ -266,6 +282,7 @@ services:
       - "8080:8080"
     volumes:
       - ./infra:/app/infra:rw
+      - obs_aggregator_history_data:/app/data
     env_file: .env
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -318,3 +335,4 @@ services:
 volumes:
   obs_aggregator_prometheus_data:
   obs_aggregator_loki_data:
+  obs_aggregator_history_data:

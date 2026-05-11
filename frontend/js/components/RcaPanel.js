@@ -17,9 +17,55 @@ class RcaPanel {
   // options.hasErrors  – used by the placeholder to customize its message
   // options.followups  – stateless browser-side follow-up chat history
   constructor({ rca, showRca, hasErrors, followups }) {
-    this.element = showRca && rca?.performed
-      ? this._buildResults(rca, followups || [])
-      : this._buildPlaceholder(hasErrors);
+    if (showRca && rca?.performed) {
+      this.element = this._buildResults(rca, followups || []);
+    } else if (showRca && rca && rca.error) {
+      this.element = this._buildFailed(rca);
+    } else {
+      this.element = this._buildPlaceholder(hasErrors);
+    }
+    this.element.id = 'rca-panel';   // stable handle so api.js can swap in a loading view
+  }
+
+  // ── Loading view (LLM request in flight) ──────────────────────────────────
+
+  static loadingElement() {
+    const panel = document.createElement('div');
+    panel.className = 'panel animate-in';
+    panel.id = 'rca-panel';
+    panel.innerHTML = `
+      <div class="panel-header">
+        <span class="panel-title" style="color:var(--accent)">Root Cause Analysis</span>
+        <span class="panel-count">analyzing… ▾</span>
+      </div>
+      <div class="panel-body">
+        <div class="rca-loading">
+          <span class="rca-spinner">⟳</span>
+          <span>Analyzing signals with AI — this can take a few seconds…</span>
+        </div>
+      </div>
+    `;
+    return panel;
+  }
+
+  // ── Failed view (RCA ran but errored — bad/missing key, unsupported provider, API error) ──
+
+  _buildFailed(rca) {
+    const panel = document.createElement('div');
+    panel.className = 'panel animate-in';
+    panel.innerHTML = `
+      <div class="panel-header">
+        <span class="panel-title" style="color:var(--error)">Root Cause Analysis</span>
+        <span class="panel-count">failed ▾</span>
+      </div>
+      <div class="panel-body">
+        <div class="rca-placeholder">
+          <div style="color:var(--error);margin-bottom:12px">⚠ ${escHtml(rca.error || 'Analysis failed')}</div>
+          <button class="btn-analyze" id="btn-analyze" onclick="runAnalyze()">⚡ Retry analysis</button>
+        </div>
+      </div>
+    `;
+    return panel;
   }
 
   // ── Full results view ───────────────────────────────────────────────────────
@@ -41,13 +87,14 @@ class RcaPanel {
 
     const evidenceHtml = (rca.supporting_evidence || [])
       .map((e, idx) => {
+        // data-evidence-idx lets evidence.js make the item clickable (jump to the signal row).
         const text = escHtml(e);
         const separator = text.indexOf(' — ');
         const hasDetail = separator >= 0;
         const lead = hasDetail ? text.slice(0, separator).trim() : text;
         const detail = hasDetail ? text.slice(separator + 3).trim() : '';
         return `
-        <li class="evidence-item">
+        <li class="evidence-item" data-evidence-idx="${idx}">
           <span class="evidence-index">${idx + 1}</span>
           <div class="evidence-content">
             <div class="evidence-lead">${lead}</div>

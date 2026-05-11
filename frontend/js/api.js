@@ -53,11 +53,24 @@ function _storeLastQuery({ target, namespace, lookback, endpoint, data, requestB
   };
 }
 
+// ── In-flight guard ───────────────────────────────────────────────────────────
+// While a /query or RCA request is pending, block starting another one — a late
+// RCA response would otherwise overwrite a freshly-rendered query result.
+let _busy = false;
+function setBusy(busy) {
+  _busy = busy;
+  ['btn-query', 'btn-mock', 'btn-analyze'].forEach(id => {
+    const el = $(id);
+    if (el) el.disabled = busy;
+  });
+}
+
 // ── Query (without RCA) ───────────────────────────────────────────────────────
 // Reads the form, sends a POST to /query with include_rca: false, and renders
 // the result. RCA is intentionally excluded to keep the response fast — the
 // user can trigger it separately with the Analyze button.
 async function runQuery() {
+  if (_busy) return;
   const target    = $('inp-target').value.trim();
   const namespace = $('inp-namespace').value.trim() || 'default';
   const lookback  = parseInt($('inp-lookback').value) || 30;
@@ -78,11 +91,16 @@ async function runQuery() {
   });
 
   setStatus('loading');
-  $('btn-query').disabled = true;
-  $('main').innerHTML = `
+  setBusy(true);
+  // Switching to the results view — close any open content panel (Manage / Config
+  // LLM / History / …) so it doesn't sit on top of the results, and un-hide #main.
+  if (typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels(null);
+  const mainEl = $('main');
+  mainEl.style.display = '';
+  mainEl.innerHTML = `
     <div class="empty-state">
       <span class="glyph" style="animation: pulse 1s infinite; display:block">◎</span>
-      <p>Querying ${target} · ${namespace} …</p>
+      <p>Querying ${escHtml(target)} · ${escHtml(namespace)} …</p>
     </div>
   `;
 
@@ -115,7 +133,7 @@ async function runQuery() {
       </div>
     `;
   } finally {
-    $('btn-query').disabled = false;
+    setBusy(false);
   }
 }
 
@@ -123,6 +141,7 @@ async function runQuery() {
 // Re-runs the last query with include_rca: true. Called from the placeholder
 // panel button that appears after a normal query.
 async function runAnalyze() {
+  if (_busy) return;
   if (!_lastQuery) {
     alert('Run a Query first so the analyzer knows which service and time window to investigate.');
     return;
@@ -135,10 +154,22 @@ async function runAnalyze() {
     includeRca: true,
     range: start && end ? { start, end } : null,
   });
+  // Per-request LLM override from the Config LLM panel (if the user saved one).
+  const llmCfg = (window.LlmConfigPanel && LlmConfigPanel.getConfig) ? LlmConfigPanel.getConfig() : null;
+  if (llmCfg) {
+    requestBody.llm = {
+      provider: llmCfg.provider,
+      endpoint: llmCfg.endpoint || null,
+      model:    llmCfg.model || null,
+      api_key:  llmCfg.key || null,
+    };
+  }
 
-  const btn = $('btn-analyze');
-  if (btn) { btn.disabled = true; btn.textContent = '⟳ Analyzing…'; }
   setStatus('loading');
+  setBusy(true);
+  // Swap the RCA panel for a loading view while the LLM is thinking.
+  const rcaEl = document.getElementById('rca-panel');
+  if (rcaEl) rcaEl.replaceWith(RcaPanel.loadingElement());
 
   try {
     const resp = await fetch(`${endpoint}/query`, {
@@ -156,20 +187,22 @@ async function runAnalyze() {
     _lastResult = data;
     _rcaFollowupHistory = [];
     _storeLastQuery({ target, namespace, lookback, endpoint, data, requestBody });
-
-    // Surface RCA errors to the console so they're easy to inspect.
-    // The RcaPanel._buildFailed() view handles displaying them to the user.
-    if (data.rca?.error) {
-      console.error('[RCA] analysis failed:', data.rca.error);
-    }
+    // The RcaPanel._buildFailed() view shows RCA errors to the user; also log them.
+    if (data.rca?.error) console.error('[RCA] analysis failed:', data.rca.error);
 
     setStatus('ok');
     renderResult(data, true);
 
   } catch (err) {
     setStatus('error');
-    if (btn) { btn.disabled = false; btn.innerHTML = '⚡ Analyze with AI'; }
+    // Replace the loading panel with a failed view (shows the error + Retry).
+    const loadingEl = document.getElementById('rca-panel');
+    if (loadingEl) {
+      loadingEl.replaceWith(new RcaPanel({ rca: { performed: false, error: err.message }, showRca: true }).element);
+    }
     alert('RCA failed: ' + err.message);
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -244,8 +277,10 @@ function _setFollowupLoading(loading) {
 // Loads MOCK_DATA (from config.js) without hitting the API.
 // Toggling off clears all results and resets to the idle state.
 function runMock() {
+  if (_busy) return;
   const btn      = $('btn-mock');
   const isActive = btn.classList.toggle('active');
+  if (typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels(null);
 
   if (isActive) {
     setStatus('mock');
@@ -253,7 +288,9 @@ function runMock() {
     _rcaFollowupHistory = [];
     renderResult(MOCK_DATA);
   } else {
-    $('main').innerHTML = '';
+    const mainEl = $('main');
+    mainEl.style.display = '';
+    mainEl.innerHTML = '';
     _lastResult = null;
     _rcaFollowupHistory = [];
     setStatus('');
@@ -266,6 +303,7 @@ function runMock() {
 // to show, so empty sections are never displayed.
 function renderResult(data, showRca = true) {
   const main = $('main');
+  main.style.display = '';   // make sure the results area is visible (a content panel may have hidden it)
   main.innerHTML = '';
 
   // Determine whether error signals are present (used by the RCA placeholder).
@@ -274,24 +312,30 @@ function renderResult(data, showRca = true) {
 
   // Build all panels. Each is either a component instance (with .element)
   // or null (no data to show).
+  const rcaPanel     = new RcaPanel({ rca: data.rca, showRca, hasErrors, followups: _rcaFollowupHistory });
+  const metricsPanel = MetricsPanel.create(data.metrics);
+  const logsPanel    = LogsPanel.create(data.logs);
+  const tracesPanel  = TracesPanel.create(data.traces);
+
   const panels = [
     new MetaBar(data),
-    new RcaPanel({
-      rca: data.rca,
-      showRca,
-      hasErrors,
-      followups: _rcaFollowupHistory,
-    }),
+    HistoryPanel.create(data.history),
+    rcaPanel,
     CorrelationsPanel.create(data.correlations),
-    MetricsPanel.create(data.metrics),
-    LogsPanel.create(data.logs),
-    TracesPanel.create(data.traces),
+    metricsPanel,
+    logsPanel,
+    tracesPanel,
   ].filter(Boolean);  // remove nulls
 
   panels.forEach((panel, i) => {
     panel.element.style.animationDelay = `${i * 60}ms`;
     main.appendChild(panel.element);
   });
+
+  // Wire RCA evidence items so they jump to the signal row they reference.
+  if (typeof EvidenceLinker !== 'undefined') {
+    EvidenceLinker.wire(rcaPanel.element, data, { logsPanel, metricsPanel, tracesPanel });
+  }
 }
 
 // ── Service registration API wrappers ───────────────────────────────────────── ─────────────────────────────────────────

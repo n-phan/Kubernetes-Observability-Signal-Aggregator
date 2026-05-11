@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     prometheus_config_path: str = "infra/prometheus.yml"
     service_registry_path: str = "infra/service-registry.yml"
 
+    # Query/incident history (SQLite) — persisted via a Docker volume at /app/data
+    history_db_path: str = "data/history.db"
+
     # Demo runner — URLs for the in-browser scenario execution feature
     # These must be reachable from inside the aggregator container.
     demo_service_b_url: str = "http://service-b:8002"
