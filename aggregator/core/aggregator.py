@@ -22,6 +22,7 @@ from aggregator.clients.github import GitHubLinker
 from aggregator.config import settings
 from aggregator.core.correlator import Correlator
 from aggregator.core.rca_analyzer import RCAAnalyzer
+from aggregator.core.timeline import build_timeline
 from aggregator.models.query import QueryRequest
 from aggregator.models.result import QueryMeta, UnifiedResult
 from aggregator.models.signals import LogsSignal, MetricsSignal, TracesSignal
@@ -119,6 +120,9 @@ class SignalAggregator:
         # Correlate
         correlations = self._correlator.correlate(metrics, logs, traces)
 
+        # Build incident timeline (causal ordering of events)
+        timeline = build_timeline(metrics, logs, traces)
+
         # Build preliminary result so RCA can read it
         total_ms = (time.monotonic() - t0) * 1000
         result = UnifiedResult(
@@ -133,6 +137,7 @@ class SignalAggregator:
             logs=logs,
             traces=traces,
             correlations=correlations,
+            timeline=timeline,
         )
 
         # RCA — only runs when explicitly requested and error signals exist
