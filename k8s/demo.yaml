@@ -1,0 +1,272 @@
+# Demo workloads for a real K8s cluster (k3s).
+#
+# Prereqs:
+#   - kube-prometheus-stack installed in the `monitoring` namespace
+#     (provides the Prometheus Operator + ServiceMonitor CRD; its Prometheus
+#      selects ServiceMonitors labelled `release: kps`)
+#   - loki-stack installed in `monitoring` (Promtail DaemonSet auto-collects
+#     pod logs with namespace/pod/app/container labels)
+#   - the demo images imported into the node's containerd as
+#     obs/service-a:dev … obs/service-d:dev  (imagePullPolicy: Never)
+#
+# Apply:  kubectl apply -f k8s/demo.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: obs-demo
+---
+# ── Jaeger (all-in-one) ───────────────────────────────────────────────────
+# Named `jaeger` so the demo apps' OTLP endpoint (http://jaeger:4317, either
+# hardcoded in service-a/b or the OTEL_EXPORTER_OTLP_ENDPOINT default in c/d)
+# resolves via in-namespace DNS.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: obs-demo
+  labels: { app: jaeger }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: jaeger }
+  template:
+    metadata:
+      labels: { app: jaeger }
+    spec:
+      containers:
+        - name: jaeger
+          image: jaegertracing/all-in-one:1.56
+          env:
+            - { name: COLLECTOR_OTLP_ENABLED, value: "true" }
+          ports:
+            - { containerPort: 16686 }   # UI / query API
+            - { containerPort: 4317 }    # OTLP gRPC
+            - { containerPort: 4318 }    # OTLP HTTP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: obs-demo
+spec:
+  selector: { app: jaeger }
+  ports:
+    - { name: ui,        port: 16686, targetPort: 16686 }
+    - { name: otlp-grpc, port: 4317,  targetPort: 4317 }
+    - { name: otlp-http, port: 4318,  targetPort: 4318 }
+---
+# ── service-b — flaky downstream (all failure injection lives here) ────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-b
+  namespace: obs-demo
+  labels: { app: service-b }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: service-b }
+  template:
+    metadata:
+      labels: { app: service-b }
+    spec:
+      containers:
+        - name: app
+          image: obs/service-b:dev
+          imagePullPolicy: Never
+          ports:
+            - { name: http, containerPort: 8002 }
+          env:
+            - { name: FAILURE_RATE, value: "0.0" }
+            - { name: LATENCY_MS,   value: "0" }
+            - { name: OOM_ENDPOINT, value: "false" }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-b
+  namespace: obs-demo
+  labels: { app: service-b }
+spec:
+  selector: { app: service-b }
+  ports:
+    - { name: http, port: 8002, targetPort: 8002 }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: service-b
+  namespace: obs-demo
+  labels: { release: kps }
+spec:
+  selector:
+    matchLabels: { app: service-b }
+  namespaceSelector:
+    matchNames: [ obs-demo ]
+  endpoints:
+    - { port: http, path: /metrics, interval: 15s }
+---
+# ── service-a — upstream API (calls service-b, optional retry/circuit-breaker) ──
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-a
+  namespace: obs-demo
+  labels: { app: service-a }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: service-a }
+  template:
+    metadata:
+      labels: { app: service-a }
+    spec:
+      containers:
+        - name: app
+          image: obs/service-a:dev
+          imagePullPolicy: Never
+          ports:
+            - { name: http, containerPort: 8001 }
+          env:
+            - { name: SERVICE_B_URL,          value: "http://service-b:8002" }
+            - { name: ENABLE_RETRY,           value: "false" }
+            - { name: ENABLE_CIRCUIT_BREAKER, value: "false" }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-a
+  namespace: obs-demo
+  labels: { app: service-a }
+spec:
+  selector: { app: service-a }
+  ports:
+    - { name: http, port: 8001, targetPort: 8001 }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: service-a
+  namespace: obs-demo
+  labels: { release: kps }
+spec:
+  selector:
+    matchLabels: { app: service-a }
+  namespaceSelector:
+    matchNames: [ obs-demo ]
+  endpoints:
+    - { port: http, path: /metrics, interval: 15s }
+---
+# ── service-c — payment processor (GATEWAY_FAIL=1 → GatewayTimeoutError) ───
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-c
+  namespace: obs-demo
+  labels: { app: service-c }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: service-c }
+  template:
+    metadata:
+      labels: { app: service-c }
+    spec:
+      containers:
+        - name: app
+          image: obs/service-c:dev
+          imagePullPolicy: Never
+          ports:
+            - { name: http, containerPort: 8003 }
+          env:
+            - { name: GATEWAY_FAIL,                value: "0" }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4317" }
+            - { name: OTEL_SERVICE_NAME,           value: "service-c" }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-c
+  namespace: obs-demo
+  labels: { app: service-c }
+spec:
+  selector: { app: service-c }
+  ports:
+    - { name: http, port: 8003, targetPort: 8003 }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: service-c
+  namespace: obs-demo
+  labels: { release: kps }
+spec:
+  selector:
+    matchLabels: { app: service-c }
+  namespaceSelector:
+    matchNames: [ obs-demo ]
+  endpoints:
+    - { port: http, path: /metrics, interval: 15s }
+---
+# ── service-d — inventory service (DB_FAIL=1 → DatabaseConnectionError) ────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-d
+  namespace: obs-demo
+  labels: { app: service-d }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: service-d }
+  template:
+    metadata:
+      labels: { app: service-d }
+    spec:
+      containers:
+        - name: app
+          image: obs/service-d:dev
+          imagePullPolicy: Never
+          ports:
+            - { name: http, containerPort: 8004 }
+          env:
+            - { name: DB_FAIL,                     value: "0" }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://jaeger:4317" }
+            - { name: OTEL_SERVICE_NAME,           value: "service-d" }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-d
+  namespace: obs-demo
+  labels: { app: service-d }
+spec:
+  selector: { app: service-d }
+  ports:
+    - { name: http, port: 8004, targetPort: 8004 }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: service-d
+  namespace: obs-demo
+  labels: { release: kps }
+spec:
+  selector:
+    matchLabels: { app: service-d }
+  namespaceSelector:
+    matchNames: [ obs-demo ]
+  endpoints:
+    - { port: http, path: /metrics, interval: 15s }

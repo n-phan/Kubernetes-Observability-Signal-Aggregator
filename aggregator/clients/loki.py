@@ -134,22 +134,29 @@ class LokiClient(BaseObservabilityClient):
         """
         Query Loki for log lines matching the target service name.
 
-        Tries two label selectors in order:
-          1. {job="<target>"}          — matches Promtail's job label exactly
-          2. {service=~".*<target>.*"} — broader regex match on the service label
+        Tries several label selectors in order — the first that returns at least
+        one line wins; the rest are skipped. This covers both deployment shapes:
+          • Kubernetes (Promtail labels pods with namespace / app / pod / container):
+              {namespace="<ns>", app="<target>"} , {app="<target>"} , {pod=~"<target>-.+"}
+          • docker-compose (Promtail's static "job"/"service" labels):
+              {job="<target>"} , {service=~".*<target>.*"}
 
-        The first selector that returns at least one line wins; the rest are
-        skipped. If both fail, an empty LogsSignal is returned so callers never
-        have to handle None.
-
+        If all fail, an empty LogsSignal is returned so callers never handle None.
         Returned lines are sorted chronologically and multiline tracebacks are
         merged into single entries (see _group_multiline).
         """
         limit = limit or settings.max_log_lines
 
-        selectors = [
-            f'{{job="{target}"}}',
-            f'{{service=~".*{target}.*"}}',
+        ns = (namespace or "").strip()
+        selectors: list[str] = []
+        if ns and ns != "default":
+            selectors.append(f'{{namespace="{ns}", app="{target}"}}')
+            selectors.append(f'{{namespace="{ns}", pod=~"{target}-.+"}}')
+        selectors += [
+            f'{{app="{target}"}}',          # Kubernetes Promtail pod-label "app"
+            f'{{job="{target}"}}',          # docker-compose Promtail "job"
+            f'{{pod=~"{target}-.+"}}',      # Kubernetes pod name prefix
+            f'{{service=~".*{target}.*"}}', # legacy broad fallback
         ]
 
         for selector in selectors:

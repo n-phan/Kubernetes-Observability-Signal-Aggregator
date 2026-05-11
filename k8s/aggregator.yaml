@@ -1,0 +1,92 @@
+# The aggregator API, deployed into the cluster and pointed at the in-cluster
+# Prometheus / Loki / Jaeger. Exposed via NodePort 30080.
+#
+# The frontend is NOT deployed here — keep running it locally
+# (`docker compose up -d --no-deps frontend`) and set its "API Endpoint" to
+# http://<node-ip>:30080.
+#
+# RCA: the server-side ANTHROPIC_API_KEY is optional — either create a Secret
+#   kubectl -n obs-demo create secret generic aggregator-secrets \
+#     --from-literal=ANTHROPIC_API_KEY=sk-ant-...
+# or just configure the key in the frontend's "Config LLM" panel (sent per-request).
+#
+# Apply:  kubectl apply -f k8s/aggregator.yaml
+---
+# /services reads this for the Target dropdown. (Service registration is
+# read-only in K8s mode — Prometheus scraping is managed by ServiceMonitors.)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aggregator-prometheus-config
+  namespace: obs-demo
+data:
+  prometheus.yml: |
+    scrape_configs:
+      - job_name: service-a
+        static_configs: [{ targets: ['service-a:8001'] }]
+      - job_name: service-b
+        static_configs: [{ targets: ['service-b:8002'] }]
+      - job_name: service-c
+        static_configs: [{ targets: ['service-c:8003'] }]
+      - job_name: service-d
+        static_configs: [{ targets: ['service-d:8004'] }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aggregator
+  namespace: obs-demo
+  labels: { app: aggregator }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: aggregator }
+  template:
+    metadata:
+      labels: { app: aggregator }
+    spec:
+      containers:
+        - name: app
+          image: obs/aggregator:dev
+          imagePullPolicy: Never
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: PROMETHEUS_URL, value: "http://kps-kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090" }
+            - { name: LOKI_URL,       value: "http://loki.monitoring.svc.cluster.local:3100" }
+            - { name: JAEGER_URL,     value: "http://jaeger.obs-demo.svc.cluster.local:16686" }
+            - { name: LOG_LEVEL,      value: "info" }
+            # Optional — present only if you created the aggregator-secrets Secret.
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aggregator-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+          volumeMounts:
+            - { name: prom-config, mountPath: /app/infra, readOnly: true }
+            - { name: history,     mountPath: /app/data }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: prom-config
+          configMap: { name: aggregator-prometheus-config }
+        - name: history
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aggregator
+  namespace: obs-demo
+  labels: { app: aggregator }
+spec:
+  type: NodePort
+  selector: { app: aggregator }
+  ports:
+    - { name: http, port: 8080, targetPort: 8080, nodePort: 30080 }
