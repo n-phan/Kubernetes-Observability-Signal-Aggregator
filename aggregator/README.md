@@ -82,11 +82,13 @@ Defines the FastAPI application and its routes:
 
 **Core**
 - `GET /health` — liveness check, used by Docker healthchecks
-- `POST /query` — main query endpoint, accepts a `QueryRequest`, returns `UnifiedResult`
+- `POST /query` — main query endpoint, accepts a `QueryRequest`, returns `UnifiedResult`. `QueryRequest` may carry an optional `llm` block (provider / endpoint / model / api_key) from the frontend's Config LLM panel — it overrides the server-side Anthropic settings for that request; non-Anthropic providers are skipped with an explanatory error. Notable queries are recorded for the recurrence ("has this happened before?") feature, and the response carries a `history` block (`signature` + prior `recurrence`).
 - `GET /config` — returns non-sensitive runtime config for debugging
+- `GET /cluster/status` — summarized `node-exporter` metrics (CPU / memory / load / per-disk / network) for the homepage Cluster Status panel; with `?target=&namespace=` it also returns that service's pods (node, phase, restarts, waiting reasons) via `kube-state-metrics`. Implemented in `cluster.py`.
+- `GET /history` — recent query-history records (optionally `?target=&limit=`). Store + recording logic live in `history.py` (SQLite at `HISTORY_DB_PATH`).
 
 **Service management**
-- `GET /services` — lists registered services (reads `prometheus.yml` scrape configs, excluding infrastructure jobs)
+- `GET /services` — lists registered services (reads `prometheus.yml` scrape configs, excluding infrastructure jobs). In a Kubernetes deployment this file is a ConfigMap mounted into the aggregator (scraping there is `ServiceMonitor`-managed), so registration is effectively read-only.
 - `GET /services/registry` — returns `infra/service-registry.yml` as JSON
 - `POST /services/test` — probes a metrics URL and reports reachability
 - `POST /services/register` — appends a new scrape target to `prometheus.yml`, triggers a Prometheus hot-reload, and optionally records GitHub metadata in `service-registry.yml`
