@@ -45,6 +45,8 @@ const Sidebar = {
           </button>
           <div class="sb-sub" id="sb-sub-setting">
             <button class="sb-svc" id="sb-conn-config">API Endpoint &amp; Namespace</button>
+            <button class="sb-svc" id="sb-env-config">Environment</button>
+            <button class="sb-svc" id="sb-watchdog-config">Watchdog</button>
             <button class="sb-svc" id="sb-llm-config">Config LLM</button>
           </div>
         </div>
@@ -55,6 +57,12 @@ const Sidebar = {
     document.getElementById('sb-collapse').addEventListener('click', () => this.toggleCollapsed());
     document.getElementById('sb-conn-config').addEventListener('click', () => {
       if (window.ConnectionPanel) ConnectionPanel.toggle();
+    });
+    document.getElementById('sb-env-config').addEventListener('click', () => {
+      if (window.EnvironmentPanel) EnvironmentPanel.toggle();
+    });
+    document.getElementById('sb-watchdog-config').addEventListener('click', () => {
+      if (window.WatchdogPanel) WatchdogPanel.toggle();
     });
     document.getElementById('sb-llm-config').addEventListener('click', () => {
       if (window.LlmConfigPanel) LlmConfigPanel.toggle();
@@ -90,6 +98,8 @@ const Sidebar = {
     { name: 'service',    isOpen: () => { const s = document.getElementById('sp-section'); return !!(s && s.classList.contains('visible')); }, close: () => window.ServicePanel    && ServicePanel.toggle()    },
     { name: 'demo',       isOpen: () => { const s = document.getElementById('demo-section'); return !!(s && s.classList.contains('visible')); }, close: () => window.DemoPanel       && DemoPanel.toggle()       },
     { name: 'connection', isOpen: () => !!(window.ConnectionPanel  && ConnectionPanel.isOpen()),  close: () => ConnectionPanel.toggle()  },
+    { name: 'environment', isOpen: () => !!(window.EnvironmentPanel && EnvironmentPanel.isOpen()), close: () => EnvironmentPanel.toggle() },
+    { name: 'watchdog',   isOpen: () => !!(window.WatchdogPanel && WatchdogPanel.isOpen()), close: () => WatchdogPanel.toggle() },
     { name: 'llm',        isOpen: () => !!(window.LlmConfigPanel   && LlmConfigPanel.isOpen()),   close: () => LlmConfigPanel.toggle()   },
     { name: 'history',    isOpen: () => !!(window.HistoryListPanel && HistoryListPanel.isOpen()), close: () => HistoryListPanel.toggle() },
   ],

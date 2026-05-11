@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
+import smtplib
 from abc import ABC, abstractmethod
+from email.message import EmailMessage
 from typing import Any
 
 import httpx
@@ -181,8 +183,82 @@ class SNSNotifier(NotificationProvider):
             return False
 
 
+class SmtpEmailNotifier(NotificationProvider):
+    """Send RCA alerts via direct SMTP (no third-party email API)."""
+
+    def __init__(
+        self,
+        smtp_host: str,
+        smtp_port: int,
+        smtp_username: str,
+        smtp_password: str,
+        from_email: str,
+        to_email: str,
+        use_starttls: bool = True,
+    ) -> None:
+        self.smtp_host = smtp_host
+        self.smtp_port = smtp_port
+        self.smtp_username = smtp_username
+        self.smtp_password = smtp_password
+        self.from_email = from_email
+        self.to_email = to_email
+        self.use_starttls = use_starttls
+
+    async def send(
+        self,
+        title: str,
+        summary: str,
+        severity: str,
+        service_name: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Send email using SMTP server credentials from config."""
+        metadata = metadata or {}
+
+        body = f"""
+{title}
+
+Service: {service_name}
+Severity: {severity.upper()}
+
+Summary:
+{summary}
+"""
+
+        if metadata:
+            body += "\n\nMetadata:\n"
+            for k, v in metadata.items():
+                body += f"- {k}: {v}\n"
+
+        msg = EmailMessage()
+        msg["Subject"] = f"[{severity.upper()}] {title}"
+        msg["From"] = self.from_email
+        msg["To"] = self.to_email
+        msg.set_content(body.strip())
+
+        def _send_sync() -> None:
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as smtp:
+                smtp.ehlo()
+                if self.use_starttls:
+                    smtp.starttls()
+                    smtp.ehlo()
+                smtp.login(self.smtp_username, self.smtp_password)
+                smtp.send_message(msg)
+
+        try:
+            # smtplib is blocking; run in worker thread.
+            import asyncio
+
+            await asyncio.to_thread(_send_sync)
+            logger.info("SMTP email notification sent to %s", self.to_email)
+            return True
+        except Exception as e:
+            logger.error("Failed to send SMTP email notification: %s", e)
+            return False
+
+
 class EmailNotifier(NotificationProvider):
-    """Send RCA alerts via email (requires mailgun or similar)."""
+    """Legacy Mailgun notifier (kept for backward compatibility)."""
 
     def __init__(self, mailgun_domain: str, mailgun_key: str, to_email: str) -> None:
         self.mailgun_domain = mailgun_domain

@@ -176,6 +176,7 @@ function renderResult(data, showRca = true) {
   // Build all panels. Each is either a component instance (with .element)
   // or null (no data to show).
   const rcaPanel     = new RcaPanel({ rca: data.rca, showRca, hasErrors });
+  const timelinePanel = TimelinePanel.create(data.timeline);
   const metricsPanel = MetricsPanel.create(data.metrics);
   const logsPanel    = LogsPanel.create(data.logs);
   const tracesPanel  = TracesPanel.create(data.traces);
@@ -185,6 +186,7 @@ function renderResult(data, showRca = true) {
     HistoryPanel.create(data.history),
     rcaPanel,
     CorrelationsPanel.create(data.correlations),
+    timelinePanel,
     metricsPanel,
     logsPanel,
     tracesPanel,
