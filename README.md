@@ -233,7 +233,7 @@ K3S_EXTRA_SAN=100.x.x.x bash deploy.sh          # ...and an extra SAN for the AP
 
 It installs k3s + Helm, `helm install`s `kube-prometheus-stack` (Prometheus + node-exporter
 + kube-state-metrics) and `loki-stack` (Loki + Promtail), imports the demo images into
-containerd, and applies `k8s/demo.yaml` (Jaeger + service-a..d) and `k8s/aggregator.yaml`
+containerd, and applies `k8s/demo.yaml` (Jaeger + service-a/service-b) and `k8s/aggregator.yaml`
 (the aggregator on NodePort **30080**). It's idempotent. See the header of `deploy.sh` for
 how to supply the demo images (build with `docker compose build` + `docker save` elsewhere,
 or let the script build them if Docker is present).

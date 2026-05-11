@@ -26,10 +26,6 @@ data:
         static_configs: [{ targets: ['service-a:8001'] }]
       - job_name: service-b
         static_configs: [{ targets: ['service-b:8002'] }]
-      - job_name: service-c
-        static_configs: [{ targets: ['service-c:8003'] }]
-      - job_name: service-d
-        static_configs: [{ targets: ['service-d:8004'] }]
 ---
 apiVersion: apps/v1
 kind: Deployment

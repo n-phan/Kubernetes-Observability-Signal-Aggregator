@@ -6,13 +6,13 @@
 #   2. Helm
 #   3. kube-prometheus-stack     — Prometheus + node-exporter + kube-state-metrics
 #      loki-stack                — Loki + Promtail
-#   4. demo workloads            — Jaeger + service-a..d  (namespace obs-demo)
+#   4. demo workloads            — Jaeger + service-a/service-b  (namespace obs-demo)
 #   5. the aggregator API        — NodePort 30080         (namespace obs-demo)
 #
 # Run ON the target Linux server, from the repo root:
 #       bash deploy.sh
 #
-# Demo images: the manifests expect obs/service-a..d:dev and obs/aggregator:dev
+# Demo images: the manifests expect obs/service-a:dev, obs/service-b:dev and obs/aggregator:dev
 # in the node's containerd. This script gets them one of two ways:
 #   a) if obs-images.tar (or $IMAGES_TAR) is next to this script, it imports it
 #      (build it elsewhere with:  docker compose build  &&
@@ -35,7 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NS_DEMO="obs-demo"
 NS_MON="monitoring"
 IMAGES_TAR="${IMAGES_TAR:-$SCRIPT_DIR/obs-images.tar}"
-IMAGE_NAMES=(service-a service-b service-c service-d aggregator)
+IMAGE_NAMES=(service-a service-b aggregator)
 
 log()  { printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
@@ -96,7 +96,7 @@ sudo k3s ctr images ls 2>/dev/null | grep -q 'obs/aggregator:dev' \
   || die "Image import failed — obs/aggregator:dev not found in containerd."
 
 # ── 5. Deploy demo workloads + aggregator ─────────────────────────────────
-log "Deploying demo workloads (Jaeger + service-a..d) into namespace $NS_DEMO..."
+log "Deploying demo workloads (Jaeger + service-a/service-b) into namespace $NS_DEMO..."
 kubectl apply -f "$SCRIPT_DIR/k8s/demo.yaml"
 
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
@@ -112,7 +112,7 @@ kubectl apply -f "$SCRIPT_DIR/k8s/aggregator.yaml"
 kubectl -n "$NS_DEMO" rollout restart deployment/aggregator >/dev/null 2>&1 || true
 
 log "Waiting for workloads to become ready..."
-for d in jaeger service-a service-b service-c service-d aggregator; do
+for d in jaeger service-a service-b aggregator; do
   kubectl -n "$NS_DEMO" rollout status "deployment/$d" --timeout=180s
 done
 
