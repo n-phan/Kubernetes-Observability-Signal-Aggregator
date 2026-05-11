@@ -18,6 +18,8 @@ from aggregator.demo import router as demo_router
 from aggregator.models.followup import FollowUpRequest, FollowUpResponse
 from aggregator.models.query import QueryRequest
 from aggregator.models.result import UnifiedResult
+from aggregator.watchdog import WatchdogMonitor, AlertNotificationBridge
+from aggregator.notifier import NotificationManager, SlackNotifier, SNSNotifier
 
 _INFRA_SERVICES: frozenset[str] = frozenset(
     {"prometheus", "loki", "jaeger", "promtail", "aggregator", "node", "node-exporter"}
@@ -32,15 +34,46 @@ logging.basicConfig(level=settings.log_level.upper())
 logger = logging.getLogger(__name__)
 
 _aggregator: SignalAggregator | None = None
+_watchdog: WatchdogMonitor | None = None
+_notification_manager: NotificationManager | None = None
+_current_environment: str = settings.environment
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _aggregator
+    global _aggregator, _watchdog, _notification_manager
     await history.init_db()
     _aggregator = SignalAggregator()
+    
+    # Initialize notification manager
+    _notification_manager = NotificationManager()
+    if settings.slack_webhook_url:
+        _notification_manager.add_provider(SlackNotifier(settings.slack_webhook_url))
+    if settings.sns_topic_arn:
+        _notification_manager.add_provider(SNSNotifier(settings.sns_topic_arn, settings.sns_region))
+    
+    # Initialize watchdog
+    _watchdog = WatchdogMonitor(query_function=_aggregator.query)
+    if settings.watchdog_enabled:
+        # Start watchdog for all registered services
+        services = await list_services()
+        await _watchdog.start(
+            services=services,
+            check_interval_seconds=settings.watchdog_interval_seconds,
+            lookback_minutes=settings.watchdog_lookback_minutes,
+            anomaly_threshold=settings.watchdog_anomaly_threshold,
+        )
+        # Connect watchdog alerts to notification manager
+        if _notification_manager.providers:
+            bridge = AlertNotificationBridge(_notification_manager)
+            _watchdog.add_alert_callback(bridge.on_alert)
+    
     logger.info("Signal aggregator started")
     yield
+    
+    # Cleanup
+    if _watchdog:
+        await _watchdog.stop()
     if _aggregator:
         await _aggregator.close()
     logger.info("Signal aggregator shut down")
@@ -345,4 +378,83 @@ async def config_view() -> dict[str, object]:
         "default_lookback_minutes": settings.default_lookback_minutes,
         "max_log_lines": settings.max_log_lines,
         "max_traces": settings.max_traces,
+        "environment": _current_environment,
+        "watchdog_enabled": _watchdog.state.enabled if _watchdog else False,
     }
+
+
+# ── Watchdog endpoints ────────────────────────────────────────────────────────
+
+class WatchdogRequest(BaseModel):
+    enabled: bool
+    services: list[str]
+    check_interval_seconds: int = 60
+    lookback_minutes: int = 15
+    anomaly_threshold: float = 0.7
+
+
+@app.post("/api/watchdog")
+async def toggle_watchdog(request: WatchdogRequest) -> dict[str, object]:
+    """Start or stop watchdog monitoring."""
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialized")
+
+    if request.enabled:
+        await _watchdog.start(
+            services=request.services,
+            check_interval_seconds=request.check_interval_seconds,
+            lookback_minutes=request.lookback_minutes,
+            anomaly_threshold=request.anomaly_threshold,
+        )
+        return {"enabled": True, "services": request.services}
+    else:
+        await _watchdog.stop()
+        return {"enabled": False}
+
+
+@app.get("/api/watchdog/alerts")
+async def get_watchdog_alerts(limit: int = 10) -> dict[str, object]:
+    """Retrieve recent watchdog alerts."""
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialized")
+
+    alerts = await _watchdog.get_alerts(limit)
+    return {"alerts": [a.model_dump() for a in alerts]}
+
+
+@app.delete("/api/watchdog/alerts")
+async def clear_watchdog_alerts() -> dict[str, str]:
+    """Clear all watchdog alerts."""
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialized")
+
+    await _watchdog.clear_alerts()
+    return {"cleared": "ok"}
+
+
+# ── Environment management endpoints ──────────────────────────────────────────
+
+class EnvironmentRequest(BaseModel):
+    environment: str
+
+
+@app.post("/api/environment")
+async def set_environment(request: EnvironmentRequest) -> dict[str, object]:
+    """Switch to a different environment (local, staging, production)."""
+    global _current_environment
+    valid_envs = ["local", "staging", "production"]
+    if request.environment not in valid_envs:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid environment. Must be one of: {', '.join(valid_envs)}"
+        )
+
+    _current_environment = request.environment
+    logger.info("Environment switched to: %s", request.environment)
+    return {"environment": request.environment}
+
+
+@app.get("/api/environment")
+async def get_environment() -> dict[str, str]:
+    """Get current environment."""
+    return {"environment": _current_environment}
