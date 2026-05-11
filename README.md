@@ -18,6 +18,10 @@ results are correlated by a rule engine that detects cross-signal patterns (e.g.
 error spike that coincides with a log burst). Optionally, the correlated signals are sent
 to the Anthropic API for AI root cause analysis.
 
+RCA can also run through an optional Hermes OpenAI-compatible agent. Recent RCA updates add
+structured log evidence, suspicious telemetry-gap events, and a scoped follow-up chat after
+analysis completes.
+
 Four demo microservices generate realistic signals. `service-a` and `service-b` are always
 registered: `service-b` is intentionally flaky, with failure modes controllable via the
 in-browser Demo panel. `service-c` (payment processor) and `service-d` (inventory service)
@@ -37,7 +41,7 @@ Prometheus, Loki, Promtail, and Jaeger fit together), see [`infra/README.md`](in
 ## Prerequisites
 
 - Docker Desktop (includes `docker compose`)
-- An Anthropic API key — required for the "Analyze with AI" button
+- An Anthropic API key — required for the "Analyze with AI" button in default RCA mode
   (get one at https://console.anthropic.com)
 - A GitHub personal access token — optional, enables code reference links in RCA results
   (get one at https://github.com/settings/tokens, `repo:read` scope sufficient)
@@ -59,8 +63,21 @@ cp .env.example .env
 Open `.env` and configure your credentials:
 
 ```
-# Required — enables the "Analyze with AI" button
+# Required — enables the "Analyze with AI" button in default RCA mode
 ANTHROPIC_API_KEY=sk-ant-api03-...
+
+# Optional — use Hermes as the RCA agent instead of the one-shot Anthropic path.
+# Start a Hermes OpenAI-compatible API server separately, then set:
+RCA_MODE=hermes
+HERMES_API_URL=http://host.docker.internal:8642/v1
+HERMES_API_KEY=
+HERMES_MODEL=hermes-agent
+HERMES_TOOLS_ENABLED=true
+HERMES_INVESTIGATION_MODE=tools_first
+HERMES_TIMEOUT_SECONDS=90
+HERMES_MAX_TOOL_ROUNDS=4
+HERMES_MAX_TOOL_CALLS=8
+HERMES_TOOL_LOOKBACK_MAX_MINUTES=120
 
 # Optional — adds a "Code references" section to RCA results with GitHub links
 # The GITHUB_REPO is pre-configured for this repository (n-phan/k8s-obs-aggregator-final).
@@ -69,7 +86,13 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 GITHUB_TOKEN=github_pat_...
 ```
 
-`ANTHROPIC_API_KEY` is the only setting that must be filled in. The GitHub integration is purely optional — RCA produces a full analysis (summary, root cause, recommended actions) without it.
+`ANTHROPIC_API_KEY` is the only setting that must be filled in for the default RCA mode.
+To use Hermes, run a Hermes OpenAI-compatible API server and set `RCA_MODE=hermes`; Hermes
+first calls the aggregator overview tool, then can call read-only metrics, logs, traces,
+and correlation tools for drill-down evidence. If Hermes is unavailable, the aggregator
+falls back to the default one-shot RCA when `ANTHROPIC_API_KEY` is configured. The GitHub
+integration is purely optional — RCA produces a full analysis (summary, root cause,
+recommended actions) without it.
 
 ### 2. Start the stack
 
@@ -124,11 +147,35 @@ Available scenarios:
 | Inventory DB failure | service-d | Two-frame call chain exception, custom error counter |
 | Resilience comparison | service-a / service-b | Retry and circuit breaker effect on error propagation |
 
-Each scenario fires a burst of requests, then stops. Open the UI, select the target service
-in the **Target** dropdown, and click **Query** (or **Analyze with AI**) to see the signals.
+Each scenario fires a burst of requests, then stops. The demo stream records the exact
+`window_start` and `window_end`, and the UI uses that window on the next **Query** so the
+result is scoped to the run you just generated. After that query renders, **Analyze with
+AI** reuses the same exact window.
 
 The demo panel also has a **Reset** button that restores all services to their default
 (no-failure) state.
+
+---
+
+## RCA follow-up and tools
+
+The **Analyze with AI** button reruns the last query with `include_rca=true`. RCA now runs
+for errors, high latency, and suspicious telemetry absence events such as traffic without
+matching logs or traces. RCA output can include a structured **Logs** evidence section when
+error or warning log lines directly support the conclusion.
+
+When `RCA_MODE=hermes`, Hermes can run in `tools_first` mode: it is instructed to call the
+aggregate observability overview first, then use read-only metrics, logs, traces, or
+correlation tools only when it needs more evidence. The same read-only tool set is exposed
+through the local MCP bridge:
+
+```bash
+AGGREGATOR_API_URL=http://localhost:8080 python -m aggregator.mcp_observability_server
+```
+
+After a completed RCA, the RCA panel shows a follow-up chat for incident-scoped questions.
+Follow-up uses Hermes first and falls back to Anthropic when Hermes is unavailable and
+`ANTHROPIC_API_KEY` is configured.
 
 ---
 
@@ -138,6 +185,11 @@ The demo panel also has a **Reset** button that restores all services to their d
 k8s-obs-aggregator/
 │
 ├── aggregator/               FastAPI backend — see aggregator/README.md
+│   ├── mcp_observability_server.py  Read-only MCP bridge for Hermes
+│   └── core/
+│       ├── hermes_rca_agent.py      Optional Hermes RCA adapter
+│       ├── rca_followup.py          RCA follow-up assistant
+│       └── suspicious_absence.py    Telemetry gap detector
 │
 ├── demo/
 │   ├── service-a/            Upstream API (port 8001) — retry and circuit breaker logic
@@ -185,9 +237,12 @@ pytest -x
 ```
 
 `tests/test_aggregator.py` covers the correlator rules, the aggregator's fan-out
-behavior, `TimeWindow` validation, and the Loki multiline-merging and severity-detection
-helpers. `tests/test_rca_scenarios.py` covers the full RCA pipeline across four failure
-scenarios using mocked Anthropic responses.
+behavior, suspicious absence events, Hermes RCA behavior, RCA follow-up, `TimeWindow`
+validation, and the Loki multiline-merging and severity-detection helpers.
+`tests/test_rca_scenarios.py` covers the full RCA pipeline across four failure scenarios
+using mocked model responses. `tests/test_mcp_observability_server.py` covers the
+read-only MCP bridge, and `tests/test_demo.py` covers the demo scenario query-window
+events.
 
 ---
 
@@ -199,10 +254,16 @@ generate traffic first — the panels show signals from the last 30 minutes, so 
 to be recent activity. If the dropdown is empty, wait a few seconds and reload the page.
 
 **"Analyze with AI" shows an error or does nothing**
-`ANTHROPIC_API_KEY` is missing or invalid in `.env`. Metrics, logs, and traces still work
-without it. If analysis runs but the "Code references" section is missing or shows
-"No matches found", the GitHub token (`GITHUB_TOKEN`) is not set — that section is optional.
-Code references only appear in scenarios that produce Python stack traces (e.g., the crash scenario).
+For default RCA mode, `ANTHROPIC_API_KEY` is missing or invalid in `.env`. For
+`RCA_MODE=hermes`, check that `HERMES_API_URL` points at a running Hermes server. Metrics,
+logs, and traces still work without it. If analysis runs but the "Code references" section
+is missing or shows "No matches found", the GitHub token (`GITHUB_TOKEN`) is not set —
+that section is optional. Code references only appear in scenarios that produce Python
+stack traces (e.g., the crash scenario).
+
+**Follow-up chat fails**
+Follow-up requires a completed RCA first. Hermes is the primary follow-up provider; if it is
+unavailable, Anthropic fallback only works when `ANTHROPIC_API_KEY` is configured.
 
 **`port is already allocated`**
 Another process is using one of the required ports. `lsof -i :<port>` identifies it.

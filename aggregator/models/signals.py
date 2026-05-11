@@ -3,7 +3,6 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field, computed_field
 
-
 # ---------------------------------------------------------------------------
 # Shared
 # ---------------------------------------------------------------------------
@@ -27,7 +26,7 @@ class MetricSample(BaseModel):
     """A single time-series sample."""
 
     timestamp: datetime
-    value: float
+    value: float | None
 
 
 class MetricSeries(BaseModel):
@@ -42,14 +41,16 @@ class MetricSeries(BaseModel):
     def latest_value(self) -> float | None:
         if not self.samples:
             return None
-        return max(self.samples, key=lambda s: s.timestamp).value
+        latest = max(self.samples, key=lambda s: s.timestamp)
+        return latest.value
 
     @computed_field
     @property
     def peak_value(self) -> float | None:
-        if not self.samples:
+        values = [sample.value for sample in self.samples if sample.value is not None]
+        if not values:
             return None
-        return max(s.value for s in self.samples)
+        return max(values)
 
 
 class MetricsSignal(BaseModel):

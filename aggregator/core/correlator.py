@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import statistics
-from datetime import datetime, timedelta
 
 from aggregator.models.result import CorrelationEvent
 from aggregator.models.signals import (
@@ -223,7 +222,7 @@ def _get_series_by_name(metrics: MetricsSignal, name: str) -> list[MetricSeries]
 
 def _z_score_max(series: MetricSeries) -> float | None:
     """Return the z-score of the peak value relative to the series mean."""
-    values = [s.value for s in series.samples]
+    values = [sample.value for sample in series.samples if sample.value is not None]
     if len(values) < 3:
         return None
     try:

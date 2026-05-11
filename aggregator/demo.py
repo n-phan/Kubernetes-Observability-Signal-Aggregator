@@ -14,7 +14,8 @@ SSE event shapes:
   {"type": "status",  "message": "..."}
   {"type": "config",  "failure_rate": 0.7, "latency_ms": 0}
   {"type": "request", "index": 1, "total": 30, "status_code": 200, "elapsed_ms": 45}
-  {"type": "done",    "success": 9, "failed": 21, "total": 30, "query_target": "service-a"}
+  {"type": "done",    "success": 9, "failed": 21, "total": 30, "query_target": "service-a",
+                      "window_start": "...", "window_end": "..."}
   {"type": "error",   "message": "..."}
 """
 from __future__ import annotations
@@ -22,7 +23,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter
@@ -187,7 +189,12 @@ async def run_scenario(scenario: str) -> StreamingResponse:
     if scenario not in SCENARIOS:
         names = ", ".join(SCENARIOS)
         return StreamingResponse(
-            iter([_sse({"type": "error", "message": f"Unknown scenario '{scenario}'. Valid: {names}"})]),
+            iter([
+                _sse({
+                    "type": "error",
+                    "message": f"Unknown scenario '{scenario}'. Valid: {names}",
+                })
+            ]),
             media_type="text/event-stream",
         )
 
@@ -207,12 +214,18 @@ async def run_scenario(scenario: str) -> StreamingResponse:
     req_body      = spec.get("body")
 
     async def generate() -> AsyncGenerator[str, None]:
+        window_start = datetime.now(tz=UTC)
+
         async with httpx.AsyncClient() as client:
 
             # Reset the target service to clear any prior state.
             # For scenarios that use service-b, the spec key `reset_service_b`
             # controls this; for service-c/d the reset_url points at those services.
-            reset_label = "service-b" if spec.get("reset_service_b", True) else spec.get("query_target", "service")
+            reset_label = (
+                "service-b"
+                if spec.get("reset_service_b", True)
+                else spec.get("query_target", "service")
+            )
             yield _sse({"type": "status", "message": f"Resetting {reset_label} to clean state..."})
             try:
                 await client.post(reset_url, timeout=3.0)
@@ -238,20 +251,28 @@ async def run_scenario(scenario: str) -> StreamingResponse:
                         parts = ", ".join(f"{k}={v}" for k, v in applied.items())
                         yield _sse({"type": "status", "message": f"✓ Configured: {parts}"})
                 except Exception as exc:
-                    yield _sse({"type": "error", "message": f"Could not configure {reset_label}: {exc}"})
+                    yield _sse({
+                        "type": "error",
+                        "message": f"Could not configure {reset_label}: {exc}",
+                    })
                     return
             else:
                 yield _sse({"type": "status", "message": "No configuration change needed."})
 
             # Step 2: fire the requests one at a time, streaming each result
             total = spec["count"]
-            yield _sse({"type": "status", "message": f"Sending {total} requests to {target_url}..."})
+            yield _sse({
+                "type": "status",
+                "message": f"Sending {total} requests to {target_url}...",
+            })
 
             success = 0
             failed = 0
 
             for i in range(1, total + 1):
-                status_code, elapsed_ms = await _fire_request(client, target_url, req_method, req_body)
+                status_code, elapsed_ms = await _fire_request(
+                    client, target_url, req_method, req_body
+                )
                 ok = 200 <= status_code < 300
 
                 if ok:
@@ -269,12 +290,15 @@ async def run_scenario(scenario: str) -> StreamingResponse:
                 })
 
             # Step 3: emit the summary
+            window_end = datetime.now(tz=UTC)
             yield _sse({
                 "type":         "done",
                 "success":      success,
                 "failed":       failed,
                 "total":        total,
                 "query_target": spec["query_target"],
+                "window_start": window_start.isoformat(),
+                "window_end":   window_end.isoformat(),
             })
 
     return StreamingResponse(

@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime
 
 from aggregator.clients.base import BaseObservabilityClient, ObservabilityClientError
@@ -123,9 +124,19 @@ class PrometheusClient(BaseObservabilityClient):
             metric_labels: dict[str, str] = item.get("metric", {})
             name = metric_labels.pop("__name__", "unknown")
             samples = [
-                MetricSample(timestamp=datetime.fromtimestamp(float(ts)), value=float(val))
+                MetricSample(
+                    timestamp=datetime.fromtimestamp(float(ts)),
+                    value=_parse_sample_value(val),
+                )
                 for ts, val in item.get("values", [])
             ]
             series_list.append(MetricSeries(name=name, labels=metric_labels, samples=samples))
 
         return series_list, duration_ms
+
+
+def _parse_sample_value(raw: str) -> float | None:
+    value = float(raw)
+    if not math.isfinite(value):
+        return None
+    return value

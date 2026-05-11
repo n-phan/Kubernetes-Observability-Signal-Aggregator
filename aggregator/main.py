@@ -1,7 +1,7 @@
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
 from urllib.parse import urlparse
 
 import httpx
@@ -10,10 +10,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from aggregator.clients.prometheus import PrometheusClient
 from aggregator.config import settings
 from aggregator.core.aggregator import SignalAggregator
 from aggregator.demo import router as demo_router
+from aggregator.models.followup import FollowUpRequest, FollowUpResponse
 from aggregator.models.query import QueryRequest
 from aggregator.models.result import UnifiedResult
 
@@ -213,7 +213,10 @@ async def delete_service(name: str) -> dict[str, object]:
     Prometheus hot-reload, and removes its entry from service-registry.yml.
     """
     if name in _PROTECTED_SERVICES:
-        raise HTTPException(status_code=409, detail=f"Service '{name}' is protected and cannot be removed")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Service '{name}' is protected and cannot be removed",
+        )
 
     config_path = Path(settings.prometheus_config_path)
     try:
@@ -237,7 +240,10 @@ async def delete_service(name: str) -> dict[str, object]:
         async with httpx.AsyncClient(timeout=5.0) as client:
             await client.post(f"{settings.prometheus_url}/-/reload")
     except Exception as exc:
-        logger.warning("Prometheus reload failed after removal (service removed but reload skipped): %s", exc)
+        logger.warning(
+            "Prometheus reload failed after removal (service removed but reload skipped): %s",
+            exc,
+        )
 
     registry_path = Path(settings.service_registry_path)
     if registry_path.exists():
@@ -257,7 +263,9 @@ async def delete_service(name: str) -> dict[str, object]:
 
 
 @app.put("/services/{name}")
-async def update_service_github(name: str, request: UpdateServiceGithubRequest) -> dict[str, object]:
+async def update_service_github(
+    name: str, request: UpdateServiceGithubRequest
+) -> dict[str, object]:
     """
     Update GitHub metadata for an existing service in service-registry.yml.
     The service must already exist in prometheus.yml.
@@ -303,6 +311,22 @@ async def update_service_github(name: str, request: UpdateServiceGithubRequest) 
         yaml.dump(registry, f, default_flow_style=False, sort_keys=False)
 
     return {"ok": True, "name": name, "entry": entry}
+
+
+@app.post("/rca/followup", response_model=FollowUpResponse)
+async def rca_followup(request: FollowUpRequest) -> FollowUpResponse:
+    if _aggregator is None:
+        raise HTTPException(status_code=503, detail="Aggregator not initialised")
+    if not request.incident.rca.performed:
+        raise HTTPException(
+            status_code=400,
+            detail="RCA must be performed before asking follow-up questions",
+        )
+    return await _aggregator.follow_up(
+        incident=request.incident,
+        question=request.question,
+        history=request.history,
+    )
 
 
 @app.get("/config")

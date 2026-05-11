@@ -19,7 +19,7 @@ scrape_configs:
       - host: unix:///var/run/docker.sock
         filters:
         - name: label
-          values: ["com.docker.compose.project=k8s-obs-aggregator-final"]
+          values: ["com.docker.compose.project=kubernetes-observability-signal-aggregator"]
         refresh_interval: 5s
     relabel_configs:
       # Use the container name as the service label

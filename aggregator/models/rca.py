@@ -7,6 +7,8 @@ and GitHub code links.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -30,6 +32,16 @@ class RecommendedAction(BaseModel):
     rationale: str
 
 
+class LogEvidence(BaseModel):
+    """A log line that directly supports the RCA conclusion."""
+
+    timestamp: datetime | None = None
+    severity: str = ""
+    message: str = ""
+    relevance: str = ""
+    labels: dict[str, str] = Field(default_factory=dict)
+
+
 class RCAResult(BaseModel):
     """
     The complete root cause analysis for one query.
@@ -43,6 +55,9 @@ class RCAResult(BaseModel):
 
     # What specific signals supported this conclusion
     supporting_evidence: list[str] = Field(default_factory=list)
+
+    # Specific log lines that support the conclusion
+    log_evidence: list[LogEvidence] = Field(default_factory=list)
 
     # What to do next, ordered by priority
     recommended_actions: list[RecommendedAction] = Field(default_factory=list)
