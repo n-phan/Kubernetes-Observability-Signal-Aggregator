@@ -19,7 +19,13 @@ from aggregator.models.followup import FollowUpRequest, FollowUpResponse
 from aggregator.models.query import QueryRequest
 from aggregator.models.result import UnifiedResult
 from aggregator.watchdog import WatchdogMonitor, AlertNotificationBridge
-from aggregator.notifier import NotificationManager, SlackNotifier, SNSNotifier
+from aggregator.notifier import (
+    NotificationManager,
+    SlackNotifier,
+    SNSNotifier,
+    SmtpEmailNotifier,
+    EmailNotifier,
+)
 
 _INFRA_SERVICES: frozenset[str] = frozenset(
     {"prometheus", "loki", "jaeger", "promtail", "aggregator", "node", "node-exporter"}
@@ -51,9 +57,41 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _notification_manager.add_provider(SlackNotifier(settings.slack_webhook_url))
     if settings.sns_topic_arn:
         _notification_manager.add_provider(SNSNotifier(settings.sns_topic_arn, settings.sns_region))
+    # Prefer direct SMTP email when configured.
+    if (
+        settings.smtp_host
+        and settings.smtp_username
+        and settings.smtp_password
+        and settings.smtp_from_email
+        and settings.alert_email
+    ):
+        _notification_manager.add_provider(
+            SmtpEmailNotifier(
+                smtp_host=settings.smtp_host,
+                smtp_port=settings.smtp_port,
+                smtp_username=settings.smtp_username,
+                smtp_password=settings.smtp_password,
+                from_email=settings.smtp_from_email,
+                to_email=settings.alert_email,
+                use_starttls=settings.smtp_use_starttls,
+            )
+        )
+    elif settings.mailgun_domain and settings.mailgun_api_key and settings.alert_email:
+        _notification_manager.add_provider(
+            EmailNotifier(
+                mailgun_domain=settings.mailgun_domain,
+                mailgun_key=settings.mailgun_api_key,
+                to_email=settings.alert_email,
+            )
+        )
     
     # Initialize watchdog
     _watchdog = WatchdogMonitor(query_function=_aggregator.query)
+    # Connect watchdog alerts to notification manager (works whether started now or later via API).
+    if _notification_manager.providers:
+        bridge = AlertNotificationBridge(_notification_manager)
+        _watchdog.add_alert_callback(bridge.on_alert)
+
     if settings.watchdog_enabled:
         # Start watchdog for all registered services
         services = await list_services()
@@ -63,10 +101,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             lookback_minutes=settings.watchdog_lookback_minutes,
             anomaly_threshold=settings.watchdog_anomaly_threshold,
         )
-        # Connect watchdog alerts to notification manager
-        if _notification_manager.providers:
-            bridge = AlertNotificationBridge(_notification_manager)
-            _watchdog.add_alert_callback(bridge.on_alert)
     
     logger.info("Signal aggregator started")
     yield

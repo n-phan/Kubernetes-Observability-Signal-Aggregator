@@ -607,6 +607,10 @@ main {
 /* ── LLM config panel (Settings → Config LLM) ── */
 #llm-section { display: none; background: var(--bg); }
 #llm-section.visible { display: block; }
+#env-section { display: none; background: var(--bg); }
+#env-section.visible { display: block; }
+#watchdog-section { display: none; background: var(--bg); }
+#watchdog-section.visible { display: block; }
 .llm-bar {
   display: flex;
   align-items: center;

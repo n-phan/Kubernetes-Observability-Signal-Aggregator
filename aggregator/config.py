@@ -74,9 +74,21 @@ class Settings(BaseSettings):
     slack_webhook_url: str | None = None  # e.g. "https://hooks.slack.com/services/..."
     sns_topic_arn: str | None = None      # e.g. "arn:aws:sns:us-east-1:123456789:alerts"
     sns_region: str = "us-east-1"
+
+    # Direct SMTP email (no Mailgun/SendGrid required)
+    smtp_host: str | None = None          # e.g. "smtp.gmail.com" or your own SMTP relay
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str | None = None
+    smtp_use_starttls: bool = True
+
+    # Recipient email address for alerts
+    alert_email: str | None = None
+
+    # Legacy Mailgun settings (kept for backward compatibility)
     mailgun_domain: str | None = None     # e.g. "observability.local"
     mailgun_api_key: str | None = None
-    alert_email: str | None = None        # recipient email for alerts
 
     # ── Watchdog Mode ────────────────────────────────────────────────────
     # Optional: Continuously monitor services for anomalies
