@@ -673,11 +673,10 @@ class TestRcaFollowUpAssistant:
 
         assert request.incident.metrics.series[0].samples[0].value is None
 
-
-def test_parse_sample_value_maps_nan_to_none() -> None:
-    assert _parse_sample_value("NaN") is None
-    assert _parse_sample_value("+Inf") is None
-    assert _parse_sample_value("0.25") == 0.25
+    def test_parse_sample_value_maps_nan_to_none(self) -> None:
+        assert _parse_sample_value("NaN") is None
+        assert _parse_sample_value("+Inf") is None
+        assert _parse_sample_value("0.25") == 0.25
 
 
 # ---------------------------------------------------------------------------
