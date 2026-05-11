@@ -131,6 +131,22 @@ const MOCK_DATA = {
     ],
   },
 
+  // (synthetic `samples` arrays are added to each metric series below so the
+  //  Metrics-panel sparklines render in Mock mode too)
+
+  history: {
+    signature: 'mockdeadbeef1234',
+    recurrence: {
+      count: 2,
+      first_seen: '2026-04-28T11:03:00Z',
+      last_seen:  '2026-05-08T14:22:00Z',
+      occurrences: [
+        { created_at: '2026-05-08T14:22:00Z', rca_summary: 'The /crash endpoint in service-b returns 500 due to an unhandled ValueError in payment processing.', rca_confidence: 0.91 },
+        { created_at: '2026-04-28T11:03:00Z', rca_summary: 'Same /crash ValueError — _process_payment(amount=None) re-raised as HTTPException(500).', rca_confidence: 0.88 },
+      ],
+    },
+  },
+
   traces: {
     error: null,
     error_trace_count: 2,
@@ -164,3 +180,25 @@ const MOCK_DATA = {
     ],
   },
 };
+
+// Give each mock metric series a plausible time-series so the sparklines have
+// something to draw in Mock mode. Values drift around `latest_value` and end on
+// a small bump toward `peak_value`.
+(function _seedMockSamples() {
+  const start = Date.parse(MOCK_DATA.meta.window_start) || Date.now() - 30 * 60000;
+  const n = 14;
+  MOCK_DATA.metrics.series.forEach(s => {
+    const base = (typeof s.latest_value === 'number') ? s.latest_value : 0;
+    const peak = (typeof s.peak_value === 'number') ? s.peak_value : base;
+    const span = Math.max(Math.abs(peak - base), Math.abs(base) * 0.15, 1e-9);
+    s.samples = Array.from({ length: n }, (_, i) => {
+      const climbing = i >= n - 4;
+      const center = climbing ? peak : base;
+      const jitter = (Math.sin(i * 1.3) * 0.4 + (Math.random() - 0.5) * 0.5) * span;
+      return {
+        timestamp: new Date(start + Math.round((i / (n - 1)) * 30 * 60000)).toISOString(),
+        value: Math.max(0, center + jitter),
+      };
+    });
+  });
+})();

@@ -36,6 +36,30 @@ class QueryMeta(BaseModel):
     total_duration_ms: float = 0.0
 
 
+class HistoryOccurrence(BaseModel):
+    """One past query record that matched the current incident signature."""
+
+    created_at: datetime
+    rca_summary: str | None = None
+    rca_confidence: float | None = None
+
+
+class RecurrenceInfo(BaseModel):
+    """How often (and when) this incident signature has been seen before."""
+
+    count: int = 0  # number of PRIOR matching records (0 = a new failure mode)
+    first_seen: datetime | None = None
+    last_seen: datetime | None = None
+    occurrences: list[HistoryOccurrence] = Field(default_factory=list)  # most recent first, capped
+
+
+class HistoryInfo(BaseModel):
+    """Attached to a query result: its incident signature and prior recurrence."""
+
+    signature: str
+    recurrence: RecurrenceInfo = Field(default_factory=RecurrenceInfo)
+
+
 class UnifiedResult(BaseModel):
     """
     The top-level output of the aggregator — everything in one place.
@@ -48,6 +72,7 @@ class UnifiedResult(BaseModel):
     traces: TracesSignal
     correlations: list[CorrelationEvent] = Field(default_factory=list)
     rca: RCAResult = Field(default_factory=RCAResult)
+    history: HistoryInfo | None = None  # populated only for notable queries
 
     @property
     def has_any_errors(self) -> bool:

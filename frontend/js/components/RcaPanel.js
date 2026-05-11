@@ -16,9 +16,55 @@ class RcaPanel {
   // options.showRca    – if false, renders the "not yet performed" placeholder
   // options.hasErrors  – used by the placeholder to customize its message
   constructor({ rca, showRca, hasErrors }) {
-    this.element = showRca && rca?.performed
-      ? this._buildResults(rca)
-      : this._buildPlaceholder(hasErrors);
+    if (showRca && rca?.performed) {
+      this.element = this._buildResults(rca);
+    } else if (showRca && rca && rca.error) {
+      this.element = this._buildFailed(rca);
+    } else {
+      this.element = this._buildPlaceholder(hasErrors);
+    }
+    this.element.id = 'rca-panel';   // stable handle so api.js can swap in a loading view
+  }
+
+  // ── Loading view (LLM request in flight) ──────────────────────────────────
+
+  static loadingElement() {
+    const panel = document.createElement('div');
+    panel.className = 'panel animate-in';
+    panel.id = 'rca-panel';
+    panel.innerHTML = `
+      <div class="panel-header">
+        <span class="panel-title" style="color:var(--accent)">Root Cause Analysis</span>
+        <span class="panel-count">analyzing… ▾</span>
+      </div>
+      <div class="panel-body">
+        <div class="rca-loading">
+          <span class="rca-spinner">⟳</span>
+          <span>Analyzing signals with AI — this can take a few seconds…</span>
+        </div>
+      </div>
+    `;
+    return panel;
+  }
+
+  // ── Failed view (RCA ran but errored — bad/missing key, unsupported provider, API error) ──
+
+  _buildFailed(rca) {
+    const panel = document.createElement('div');
+    panel.className = 'panel animate-in';
+    panel.innerHTML = `
+      <div class="panel-header">
+        <span class="panel-title" style="color:var(--error)">Root Cause Analysis</span>
+        <span class="panel-count">failed ▾</span>
+      </div>
+      <div class="panel-body">
+        <div class="rca-placeholder">
+          <div style="color:var(--error);margin-bottom:12px">⚠ ${escHtml(rca.error || 'Analysis failed')}</div>
+          <button class="btn-analyze" id="btn-analyze" onclick="runAnalyze()">⚡ Retry analysis</button>
+        </div>
+      </div>
+    `;
+    return panel;
   }
 
   // ── Full results view ───────────────────────────────────────────────────────

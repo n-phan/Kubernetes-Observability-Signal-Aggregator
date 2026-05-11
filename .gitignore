@@ -1,6 +1,15 @@
 # Environment variables — never commit API keys
 .env
 
+# Local-only docker-compose overrides (e.g. host port remapping)
+docker-compose.override.yml
+
+# Image transfer artifacts (built locally, scp'd to a k3s node, then imported)
+obs-*.tar
+
+# Local agent / tooling state
+.claude/
+
 # Python
 __pycache__/
 *.py[cod]

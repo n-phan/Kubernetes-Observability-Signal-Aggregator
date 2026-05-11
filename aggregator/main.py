@@ -10,7 +10,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from aggregator import history
 from aggregator.clients.prometheus import PrometheusClient
+from aggregator.cluster import router as cluster_router
 from aggregator.config import settings
 from aggregator.core.aggregator import SignalAggregator
 from aggregator.demo import router as demo_router
@@ -18,11 +20,12 @@ from aggregator.models.query import QueryRequest
 from aggregator.models.result import UnifiedResult
 
 _INFRA_SERVICES: frozenset[str] = frozenset(
-    {"prometheus", "loki", "jaeger", "promtail", "aggregator"}
+    {"prometheus", "loki", "jaeger", "promtail", "aggregator", "node", "node-exporter"}
 )
 
 _PROTECTED_SERVICES: frozenset[str] = frozenset(
-    {"prometheus", "loki", "jaeger", "promtail", "aggregator", "service-a", "service-b"}
+    {"prometheus", "loki", "jaeger", "promtail", "aggregator", "node", "node-exporter",
+     "service-a", "service-b"}
 )
 
 logging.basicConfig(level=settings.log_level.upper())
@@ -34,6 +37,7 @@ _aggregator: SignalAggregator | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _aggregator
+    await history.init_db()
     _aggregator = SignalAggregator()
     logger.info("Signal aggregator started")
     yield
@@ -57,6 +61,8 @@ app.add_middleware(
 )
 
 app.include_router(demo_router)
+app.include_router(cluster_router)
+app.include_router(history.router)
 
 
 @app.get("/health")

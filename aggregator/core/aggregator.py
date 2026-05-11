@@ -14,6 +14,7 @@ from pathlib import Path
 
 import yaml
 
+from aggregator import history
 from aggregator.clients.jaeger import JaegerClient
 from aggregator.clients.loki import LokiClient
 from aggregator.clients.prometheus import PrometheusClient
@@ -136,10 +137,21 @@ class SignalAggregator:
 
         # RCA — only runs when explicitly requested and error signals exist
         if request.include_rca and self._rca_analyzer:
-            rca = await self._rca_analyzer.analyze(result)
+            rca = await self._rca_analyzer.analyze(result, request.llm)
             if rca.performed and settings.github_repo:
                 rca = await self._enrich_with_github(rca, logs, request.target)
             result.rca = rca
+
+        # History — record notable queries and attach recurrence info
+        # ("has this happened before?"). Best-effort; never fails the query.
+        notable = (
+            logs.error_count > 0
+            or traces.error_trace_count > 0
+            or bool(correlations)
+            or result.rca.performed
+        )
+        if notable:
+            result.history = await history.record(result)
 
         total_ms = (time.monotonic() - t0) * 1000
         result.meta.total_duration_ms = total_ms

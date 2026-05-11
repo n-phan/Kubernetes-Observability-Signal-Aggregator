@@ -33,6 +33,19 @@ class TimeWindow(BaseModel):
         )
 
 
+class LlmConfig(BaseModel):
+    """
+    Per-request LLM settings sent by the frontend's "Config LLM" panel.
+    Only the Anthropic provider is wired up right now; other providers cause
+    RCA to be skipped with an explanatory error.
+    """
+
+    provider: str = "anthropic"          # "anthropic" / "claude" supported; others not yet
+    endpoint: str | None = None          # overrides the default Anthropic Messages URL
+    model: str | None = None             # overrides the default model id
+    api_key: str | None = None           # overrides the server-side ANTHROPIC_API_KEY
+
+
 class QueryRequest(BaseModel):
     """Top-level query input accepted by both the CLI and REST API."""
 
@@ -67,6 +80,10 @@ class QueryRequest(BaseModel):
 
     # RCA is opt-in — skipped by default to save API tokens
     include_rca: bool = False
+
+    # Optional per-request LLM override (from the frontend Config LLM panel).
+    # When omitted, RCA uses the server-side ANTHROPIC_API_KEY / default model.
+    llm: LlmConfig | None = None
 
     @model_validator(mode="after")
     def validate_time_spec(self) -> "QueryRequest":
