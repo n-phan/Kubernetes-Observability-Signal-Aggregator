@@ -92,7 +92,12 @@ async function runQuery() {
 
   setStatus('loading');
   setBusy(true);
-  $('main').innerHTML = `
+  // Switching to the results view — close any open content panel (Manage / Config
+  // LLM / History / …) so it doesn't sit on top of the results, and un-hide #main.
+  if (typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels(null);
+  const mainEl = $('main');
+  mainEl.style.display = '';
+  mainEl.innerHTML = `
     <div class="empty-state">
       <span class="glyph" style="animation: pulse 1s infinite; display:block">◎</span>
       <p>Querying ${escHtml(target)} · ${escHtml(namespace)} …</p>
@@ -280,6 +285,7 @@ function runMock() {
   if (_busy) return;
   const btn      = $('btn-mock');
   const isActive = btn.classList.toggle('active');
+  if (typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels(null);
 
   if (isActive) {
     setStatus('mock');
@@ -287,7 +293,9 @@ function runMock() {
     _rcaFollowupHistory = [];
     renderResult(MOCK_DATA);
   } else {
-    $('main').innerHTML = '';
+    const mainEl = $('main');
+    mainEl.style.display = '';
+    mainEl.innerHTML = '';
     _lastResult = null;
     _rcaFollowupHistory = [];
     setStatus('');
@@ -300,6 +308,7 @@ function runMock() {
 // to show, so empty sections are never displayed.
 function renderResult(data, showRca = true) {
   const main = $('main');
+  main.style.display = '';   // make sure the results area is visible (a content panel may have hidden it)
   main.innerHTML = '';
 
   // Determine whether error signals are present (used by the RCA placeholder).

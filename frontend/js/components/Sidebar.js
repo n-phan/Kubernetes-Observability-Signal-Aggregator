@@ -113,12 +113,16 @@ const Sidebar = {
     this._CONTENT_PANELS.forEach(p => { if (p.name !== except && p.isOpen()) p.close(); });
   },
   _closePanels() { this.closeOtherPanels(null); },
-  // The homepage Cluster Status bar is hidden whenever a content panel is taking
-  // over the right-hand side. Every panel's toggle() calls this so the bar's
-  // visibility always reflects the real state, regardless of toggle order.
+  // When a content panel takes over the right-hand side, hide the Cluster Status
+  // bar AND the query-results area (#main) so only the panel shows — not the
+  // panel stacked on top of the previous query. Every panel's toggle() calls
+  // this, so the state is always consistent regardless of toggle order.
   syncClusterBar() {
+    const open = this._panelOpen();
     const cb = document.getElementById('cluster-bar');
-    if (cb) cb.style.display = this._panelOpen() ? 'none' : '';
+    if (cb) cb.style.display = open ? 'none' : '';
+    const main = document.getElementById('main');
+    if (main) main.style.display = open ? 'none' : '';
   },
 
   toggleItem(key) {
