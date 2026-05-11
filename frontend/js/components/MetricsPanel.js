@@ -33,7 +33,7 @@ class MetricsPanel {
         .join(', ');
 
       return `
-        <tr>
+        <tr data-metric="${escHtml(s.name || '')}">
           <td>${s.name || '—'}</td>
           <td class="num">${fmt(s.latest_value)}</td>
           <td class="num">${fmt(s.peak_value)}</td>

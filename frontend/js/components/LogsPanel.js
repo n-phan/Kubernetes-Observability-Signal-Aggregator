@@ -147,6 +147,24 @@ class LogsPanel {
     if (this._els.lineInput) this._els.lineInput.value = '';
   }
 
+  // Public: jump to a 1-based global line number, clearing filters if needed,
+  // and return the rendered row element for that line (or null if not found).
+  // Used by the evidence drill-down feature to scroll to a referenced log line.
+  revealLine(lineNum) {
+    this._jumpToLine(lineNum);
+    return this.element.querySelector(`.log-row[data-global-idx="${lineNum}"]`);
+  }
+
+  // Public: find the first log line whose message contains `substr`
+  // (case-insensitive) and reveal it. Returns the row element or null.
+  revealByContent(substr) {
+    if (!substr) return null;
+    const needle = substr.toLowerCase();
+    const idx = this._allLines.findIndex(l => (l.message || '').toLowerCase().includes(needle));
+    if (idx === -1) return null;
+    return this.revealLine(idx + 1);
+  }
+
   // ── Filter application ────────────────────────────────────────────────────
 
   // Returns the subset of _allLines that pass the active filters.
@@ -196,7 +214,7 @@ class LogsPanel {
         : `<span style="width:18px;flex-shrink:0"></span>`;
 
       return `
-        <div class="log-row" data-is-error="${isErr}"
+        <div class="log-row" data-is-error="${isErr}" data-global-idx="${globalIdx}"
              data-msg="${escHtml((fmtTime(l.timestamp) + ' ' + fullMsg).toLowerCase().slice(0, 300))}">
           <span class="log-line-num">#${globalIdx}</span>
           <span class="log-ts">${fmtTime(l.timestamp)}</span>

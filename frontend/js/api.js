@@ -145,19 +145,29 @@ function renderResult(data, showRca = true) {
 
   // Build all panels. Each is either a component instance (with .element)
   // or null (no data to show).
+  const rcaPanel     = new RcaPanel({ rca: data.rca, showRca, hasErrors });
+  const metricsPanel = MetricsPanel.create(data.metrics);
+  const logsPanel    = LogsPanel.create(data.logs);
+  const tracesPanel  = TracesPanel.create(data.traces);
+
   const panels = [
     new MetaBar(data),
-    new RcaPanel({ rca: data.rca, showRca, hasErrors }),
+    rcaPanel,
     CorrelationsPanel.create(data.correlations),
-    MetricsPanel.create(data.metrics),
-    LogsPanel.create(data.logs),
-    TracesPanel.create(data.traces),
+    metricsPanel,
+    logsPanel,
+    tracesPanel,
   ].filter(Boolean);  // remove nulls
 
   panels.forEach((panel, i) => {
     panel.element.style.animationDelay = `${i * 60}ms`;
     main.appendChild(panel.element);
   });
+
+  // Wire RCA evidence items so they jump to the signal row they reference.
+  if (typeof EvidenceLinker !== 'undefined') {
+    EvidenceLinker.wire(rcaPanel.element, data, { logsPanel, metricsPanel, tracesPanel });
+  }
 }
 
 // ── Service registration API wrappers ───────────────────────────────────────── ─────────────────────────────────────────

@@ -39,7 +39,7 @@ class RcaPanel {
     `).join('');
 
     const evidenceHtml = (rca.supporting_evidence || [])
-      .map(e => `<li>${escHtml(e)}</li>`)
+      .map((e, i) => `<li class="evidence-item" data-evidence-idx="${i}">${escHtml(e)}</li>`)
       .join('');
 
     const codeRefsHtml = (rca.code_references || []).map(r => {

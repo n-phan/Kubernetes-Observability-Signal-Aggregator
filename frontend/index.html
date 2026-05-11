@@ -84,6 +84,8 @@
     components/LogsPanel.js      → paginated, filterable Loki log lines
     components/TracesPanel.js    → paginated, filterable Jaeger traces
 
+    evidence.js              → makes RCA "supporting evidence" items jump to the
+                               matching Metrics / Logs / Traces row
     api.js                   → fetch calls, instantiates the components above
 -->
     <script src="js/config.js"></script>
@@ -98,6 +100,7 @@
     <script src="js/components/DemoPanel.js"></script>
     <script src="js/components/ServicePanel.js"></script>
 
+    <script src="js/evidence.js"></script>
     <script src="js/api.js"></script>
 
     <script>
