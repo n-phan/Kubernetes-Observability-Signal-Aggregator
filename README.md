@@ -70,7 +70,7 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 # Start a Hermes OpenAI-compatible API server separately, then set:
 RCA_MODE=hermes
 HERMES_API_URL=http://host.docker.internal:8642/v1
-HERMES_API_KEY=
+HERMES_API_KEY= "YOUR_API_KEY"
 HERMES_MODEL=hermes-agent
 HERMES_TOOLS_ENABLED=true
 HERMES_INVESTIGATION_MODE=tools_first
