@@ -62,6 +62,7 @@ const Sidebar = {
     document.getElementById('sb-head-history').addEventListener('click', () => {
       const bar = document.getElementById('sidebar');
       if (bar && bar.classList.contains('collapsed')) this.toggleCollapsed();
+      document.querySelectorAll('#sidebar .sb-item.open').forEach(el => el.classList.remove('open'));
       if (window.HistoryListPanel) HistoryListPanel.toggle();
     });
 
@@ -121,6 +122,10 @@ const Sidebar = {
     if (!item) return;
     // If we just dismissed a panel, leave the item expanded instead of toggling shut.
     const opening = wasPanelOpen ? true : !item.classList.contains('open');
+    // Accordion: expanding one section collapses the others.
+    if (opening) {
+      document.querySelectorAll('#sidebar .sb-item.open').forEach(el => { if (el !== item) el.classList.remove('open'); });
+    }
     item.classList.toggle('open', opening);
     if (key === 'service' && opening) this.loadServices();
   },
