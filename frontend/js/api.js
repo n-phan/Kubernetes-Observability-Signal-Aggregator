@@ -154,6 +154,13 @@ async function runAnalyze() {
     includeRca: true,
     range: start && end ? { start, end } : null,
   });
+
+  setStatus('loading');
+  setBusy(true);
+  // Swap the RCA panel for a loading view while the LLM is thinking.
+  const rcaEl = document.getElementById('rca-panel');
+  if (rcaEl) rcaEl.replaceWith(RcaPanel.loadingElement());
+
   // Per-request LLM override from the Config LLM panel (if the user saved one).
   const llmCfg = (window.LlmConfigPanel && LlmConfigPanel.getConfig) ? LlmConfigPanel.getConfig() : null;
   if (llmCfg) {
@@ -187,8 +194,12 @@ async function runAnalyze() {
     _lastResult = data;
     _rcaFollowupHistory = [];
     _storeLastQuery({ target, namespace, lookback, endpoint, data, requestBody });
-    // The RcaPanel._buildFailed() view shows RCA errors to the user; also log them.
-    if (data.rca?.error) console.error('[RCA] analysis failed:', data.rca.error);
+
+    // Surface RCA errors to the console so they're easy to inspect.
+    // The RcaPanel._buildFailed() view handles displaying them to the user.
+    if (data.rca?.error) {
+      console.error('[RCA] analysis failed:', data.rca.error);
+    }
 
     setStatus('ok');
     renderResult(data, true);

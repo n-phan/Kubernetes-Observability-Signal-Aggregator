@@ -22,6 +22,8 @@ import httpx
 from aggregator.core.rca_gate import should_run_rca
 from aggregator.core.suspicious_absence import is_suspicious_absence_event
 from aggregator.models.query import LlmConfig
+from aggregator.core.rca_gate import should_run_rca
+from aggregator.core.suspicious_absence import is_suspicious_absence_event
 from aggregator.models.rca import LogEvidence, RCAResult, RecommendedAction
 from aggregator.models.result import UnifiedResult
 from aggregator.models.signals import LogLine, Severity, Span

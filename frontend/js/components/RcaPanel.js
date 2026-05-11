@@ -28,7 +28,6 @@ class RcaPanel {
   }
 
   // ── Loading view (LLM request in flight) ──────────────────────────────────
-
   static loadingElement() {
     const panel = document.createElement('div');
     panel.className = 'panel animate-in';
@@ -47,9 +46,7 @@ class RcaPanel {
     `;
     return panel;
   }
-
   // ── Failed view (RCA ran but errored — bad/missing key, unsupported provider, API error) ──
-
   _buildFailed(rca) {
     const panel = document.createElement('div');
     panel.className = 'panel animate-in';

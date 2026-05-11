@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     watchdog_lookback_minutes: int = 15
     watchdog_anomaly_threshold: float = 0.7  # confidence threshold (0.0-1.0)
 
-    @field_validator("prometheus_url", "loki_url", "jaeger_url", mode="before")
+    @field_validator("prometheus_url", "loki_url", "jaeger_url", "hermes_api_url", mode="before")
     @classmethod
     def strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
