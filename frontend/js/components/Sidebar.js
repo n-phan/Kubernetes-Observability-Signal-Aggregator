@@ -115,17 +115,16 @@ const Sidebar = {
     if (main) main.style.display = open ? 'none' : '';
   },
 
+  // Toggle a sidebar accordion section (Service / Setting). This only shows/hides
+  // the submenu — it does NOT touch the content panels or the results area, so
+  // expanding Setting while (say) Config LLM is open leaves Config LLM open.
   toggleItem(key) {
     const bar = document.getElementById('sidebar');
     // If the rail is collapsed, expand it first so the submenu has room.
     if (bar && bar.classList.contains('collapsed')) this.toggleCollapsed();
-    // Interacting with the sidebar nav backs out of any open content panel.
-    const wasPanelOpen = this._panelOpen();
-    this._closePanels();
     const item = document.querySelector(`.sb-item[data-key="${key}"]`);
     if (!item) return;
-    // If we just dismissed a panel, leave the item expanded instead of toggling shut.
-    const opening = wasPanelOpen ? true : !item.classList.contains('open');
+    const opening = !item.classList.contains('open');
     // Accordion: expanding one section collapses the others.
     if (opening) {
       document.querySelectorAll('#sidebar .sb-item.open').forEach(el => { if (el !== item) el.classList.remove('open'); });
@@ -162,9 +161,9 @@ const Sidebar = {
     if (mgr) mgr.addEventListener('click', () => { if (window.ServicePanel) ServicePanel.toggle(); });
   },
 
-  // Select a service as the active query target.
+  // Select a service as the active query target. (Doesn't change the right-hand
+  // view — the user clicks Query when ready.)
   selectService(name) {
-    this._closePanels();
     const sel = $('inp-target');
     if (sel) {
       if (![...sel.options].some(o => o.value === name)) {
