@@ -52,9 +52,10 @@ htmlcov/
 .AppleDouble
 .LSOverride
 
-# Docker volumes (local data, not needed in repo)
+# Docker volumes / local runtime data (not needed in repo)
 prometheus_data/
 loki_data/
+data/
 
 # IDE
 .idea/

@@ -2,9 +2,19 @@
 Query / incident history backed by SQLite.
 
 Every /query that produces notable signals (errors, error traces, correlations,
-or an RCA result) is recorded. A coarse `signature` (target + correlation kinds
-+ a normalised first line of the RCA root cause) lets us answer "has this
-happened before?" — distinguishing a new failure mode from a recurring one.
+or an RCA result) is recorded. A coarse `signature` (target + the set of
+*failure* correlation kinds) lets us answer "has this happened before?" —
+distinguishing a new failure mode from a recurring one. The signature is
+deliberately independent of whether AI RCA ran, so a plain query and an
+"Analyze with AI" query for the same incident land in the same bucket.
+
+Repeatedly querying the *same ongoing* incident does NOT inflate the recurrence
+count: if the most recent record for this (target, signature) was touched within
+`_SAME_INCIDENT_WINDOW_SEC`, we update that row in place (refreshing `last_seen`
+and the latest signal snapshot) instead of inserting a new occurrence. A genuinely
+new occurrence is only logged once activity has gone quiet for that long. A plain
+re-query never erases an RCA already attached to the occurrence — RCA columns are
+merged (COALESCE), so the analysis survives until a newer one replaces it.
 
 The DB lives at settings.history_db_path (persisted via a Docker volume).
 Uses the stdlib sqlite3 module; blocking calls run in a worker thread.
@@ -14,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +31,7 @@ from pathlib import Path
 from fastapi import APIRouter, Query
 
 from aggregator.config import settings
+from aggregator.core.suspicious_absence import SUSPICIOUS_ABSENCE_KINDS
 from aggregator.models.result import HistoryInfo, HistoryOccurrence, RecurrenceInfo, UnifiedResult
 
 logger = logging.getLogger(__name__)
@@ -30,11 +40,13 @@ router = APIRouter(prefix="/history", tags=["history"])
 
 _MAX_PER_TARGET = 200            # keep at most this many rows per target
 _OCCURRENCES_IN_RESPONSE = 5     # recent prior occurrences embedded in a /query response
+_SAME_INCIDENT_WINDOW_SEC = 10 * 60   # re-queries within this gap fold into the same occurrence
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS query_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT NOT NULL,
+  last_seen TEXT,
   target TEXT NOT NULL,
   namespace TEXT,
   window_start TEXT,
@@ -67,6 +79,10 @@ def _init_sync() -> None:
     conn = _connect()
     try:
         conn.executescript(_SCHEMA)
+        # Upgrade DBs created before the last_seen column existed.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(query_history)")}
+        if "last_seen" not in cols:
+            conn.execute("ALTER TABLE query_history ADD COLUMN last_seen TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -91,23 +107,39 @@ def _parse_dt(s: str | None) -> datetime | None:
 
 # ── Signature ──────────────────────────────────────────────────────────────
 
-_HEX_RE = re.compile(r"\b[0-9a-fA-F]{8,}\b")
-_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+# Many correlation kinds are different *detectors* of the same underlying
+# failure dimension (e.g. `error_spike` is a threshold rule, `error_rate_anomaly`
+# a z-score rule on the same series). Whether each individual rule fires depends
+# on thresholds and window variance, so the raw kind set jitters between queries
+# of one incident. For fingerprinting we fold them down to coarse families;
+# anything unrecognised maps to itself so new kinds aren't silently merged.
+_CORRELATION_FAMILY: dict[str, str] = {
+    "error_spike":                  "errors",
+    "error_rate_anomaly":           "errors",
+    "log_error_burst":              "errors",
+    "error_metric_log_correlation": "errors",
+    "latency_spike":                "latency",
+    "latency_trace_correlation":    "latency",
+    "container_restart":            "restarts",
+}
 
 
-def compute_signature(target: str, correlation_kinds: list[str], rca_root_cause: str | None) -> str:
-    """Coarse incident fingerprint — same target + same correlation kinds + same
-    normalised RCA root-cause first line → same signature."""
-    parts = [
-        (target or "").strip().lower(),
-        ",".join(sorted({(k or "").strip().lower() for k in correlation_kinds if k})),
-    ]
-    if rca_root_cause:
-        first = rca_root_cause.strip().split(". ")[0][:200].lower()
-        first = _HEX_RE.sub("ID", first)       # mask hex ids first
-        first = _NUM_RE.sub("N", first)        # then remaining numbers (e.g. "30s" → "Ns")
-        first = re.sub(r"\s+", " ", first).strip()
-        parts.append(first)
+def compute_signature(target: str, correlation_kinds: list[str]) -> str:
+    """Coarse incident fingerprint: same target + same set of failure *families*
+    → same signature.
+
+    Deliberately NOT a function of whether AI RCA ran (the free-form root-cause
+    text used to be folded in, which split otherwise-identical incidents into
+    separate "with-RCA" / "without-RCA" buckets), nor of suspicious-absence
+    events (`logs_unavailable`, `traffic_without_traces`, …) — those describe
+    telemetry gaps rather than the failure itself and flicker with backend state.
+    """
+    families = sorted({
+        _CORRELATION_FAMILY.get(kk, kk)
+        for kk in (k.strip().lower() for k in correlation_kinds if k)
+        if kk not in SUSPICIOUS_ABSENCE_KINDS
+    })
+    parts = [(target or "").strip().lower(), ",".join(families)]
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
@@ -116,17 +148,32 @@ def compute_signature(target: str, correlation_kinds: list[str], rca_root_cause:
 def _record_sync(row: dict) -> RecurrenceInfo:
     conn = _connect()
     try:
-        # Recurrence is computed over PRIOR rows (before inserting this one).
-        prior = conn.execute(
-            "SELECT created_at, rca_summary, rca_confidence FROM query_history "
-            "WHERE target=? AND signature=? ORDER BY created_at DESC",
+        now = _parse_dt(row["created_at"]) or datetime.now(tz=timezone.utc)
+
+        rows = conn.execute(
+            "SELECT id, created_at, last_seen, rca_summary, rca_root_cause, rca_confidence "
+            "FROM query_history WHERE target=? AND signature=? ORDER BY created_at DESC",
             (row["target"], row["signature"]),
         ).fetchall()
 
+        # If the most recent record for this signature was touched very recently,
+        # this query is still about the *same* occurrence — fold into that row
+        # rather than logging a fresh one.
+        merge_id: int | None = None
+        if rows:
+            latest = rows[0]
+            last_activity = _parse_dt(latest["last_seen"]) or _parse_dt(latest["created_at"])
+            if last_activity and (now - last_activity).total_seconds() <= _SAME_INCIDENT_WINDOW_SEC:
+                merge_id = latest["id"]
+
+        # Recurrence is computed over PRIOR occurrences — every existing row
+        # except the one (if any) we're about to merge this query into.
+        prior = [r for r in rows if r["id"] != merge_id]
         occurrences = [
             HistoryOccurrence(
-                created_at=_parse_dt(r["created_at"]) or datetime.now(tz=timezone.utc),
+                created_at=_parse_dt(r["created_at"]) or now,
                 rca_summary=r["rca_summary"],
+                rca_root_cause=r["rca_root_cause"],
                 rca_confidence=r["rca_confidence"],
             )
             for r in prior[:_OCCURRENCES_IN_RESPONSE]
@@ -134,28 +181,51 @@ def _record_sync(row: dict) -> RecurrenceInfo:
         recurrence = RecurrenceInfo(
             count=len(prior),
             first_seen=_parse_dt(prior[-1]["created_at"]) if prior else None,
-            last_seen=_parse_dt(prior[0]["created_at"]) if prior else None,
+            last_seen=(_parse_dt(prior[0]["last_seen"]) or _parse_dt(prior[0]["created_at"])) if prior else None,
             occurrences=occurrences,
         )
 
-        conn.execute(
-            "INSERT INTO query_history "
-            "(created_at, target, namespace, window_start, window_end, error_count, "
-            " error_trace_count, correlation_kinds, rca_performed, rca_summary, "
-            " rca_root_cause, rca_confidence, signature) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                row["created_at"], row["target"], row["namespace"], row["window_start"],
-                row["window_end"], row["error_count"], row["error_trace_count"],
-                row["correlation_kinds"], row["rca_performed"], row["rca_summary"],
-                row["rca_root_cause"], row["rca_confidence"], row["signature"],
-            ),
-        )
-        conn.execute(
-            "DELETE FROM query_history WHERE target=? AND id NOT IN "
-            "(SELECT id FROM query_history WHERE target=? ORDER BY created_at DESC LIMIT ?)",
-            (row["target"], row["target"], _MAX_PER_TARGET),
-        )
+        if merge_id is not None:
+            # Refresh the latest-signal snapshot in place. RCA columns are merged,
+            # not blindly overwritten: a plain re-query (no "Analyze") carries
+            # NULL RCA fields, and clobbering a previously-recorded RCA with those
+            # NULLs would silently lose the analysis. So keep the existing RCA
+            # unless this query produced a fresh one (COALESCE picks the new value
+            # when present, else the stored one); rca_performed never goes 1 → 0.
+            conn.execute(
+                "UPDATE query_history SET last_seen=?, window_start=?, window_end=?, "
+                " error_count=?, error_trace_count=?, correlation_kinds=?, "
+                " rca_performed=MAX(rca_performed, ?), "
+                " rca_summary=COALESCE(?, rca_summary), "
+                " rca_root_cause=COALESCE(?, rca_root_cause), "
+                " rca_confidence=COALESCE(?, rca_confidence) "
+                "WHERE id=?",
+                (
+                    row["created_at"], row["window_start"], row["window_end"],
+                    row["error_count"], row["error_trace_count"], row["correlation_kinds"],
+                    row["rca_performed"], row["rca_summary"], row["rca_root_cause"],
+                    row["rca_confidence"], merge_id,
+                ),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO query_history "
+                "(created_at, last_seen, target, namespace, window_start, window_end, error_count, "
+                " error_trace_count, correlation_kinds, rca_performed, rca_summary, "
+                " rca_root_cause, rca_confidence, signature) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    row["created_at"], row["created_at"], row["target"], row["namespace"],
+                    row["window_start"], row["window_end"], row["error_count"],
+                    row["error_trace_count"], row["correlation_kinds"], row["rca_performed"],
+                    row["rca_summary"], row["rca_root_cause"], row["rca_confidence"], row["signature"],
+                ),
+            )
+            conn.execute(
+                "DELETE FROM query_history WHERE target=? AND id NOT IN "
+                "(SELECT id FROM query_history WHERE target=? ORDER BY created_at DESC LIMIT ?)",
+                (row["target"], row["target"], _MAX_PER_TARGET),
+            )
         conn.commit()
         return recurrence
     finally:
@@ -166,11 +236,7 @@ async def record(result: UnifiedResult) -> HistoryInfo | None:
     """Record a notable query and return its HistoryInfo (signature + prior recurrence)."""
     correlation_kinds = [c.kind for c in result.correlations]
     rca = result.rca
-    sig = compute_signature(
-        result.meta.target,
-        correlation_kinds,
-        rca.root_cause if rca.performed else None,
-    )
+    sig = compute_signature(result.meta.target, correlation_kinds)
     row = {
         "created_at": datetime.now(tz=timezone.utc).isoformat(),
         "target": result.meta.target,
