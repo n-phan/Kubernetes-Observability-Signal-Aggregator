@@ -297,7 +297,7 @@
     return `<tr id="sp-row-${nameEsc}" data-name="${nameEsc}">
       <td>
         ${lock ? '<span style="color:var(--text-dim);margin-right:4px" title="Protected">🔒</span>' : ''}
-        <span style="font-family:var(--mono)">${nameEsc}</span>
+        <span style="font-family:var(--mono);cursor:pointer;color:var(--accent)" onclick="ServicePanel._selectService('${name}')" title="Click to select">${nameEsc}</span>
       </td>
       <td style="font-family:var(--mono);color:var(--text-muted)">${repo}</td>
       <td style="font-family:var(--mono);color:${entry.github_branch  ? 'var(--text-muted)' : 'var(--text-dim)'}">${branch}</td>
@@ -413,6 +413,18 @@
   }
 
   function _cancelRemove() { _loadRegistered(); }
+
+  function _selectService(name) {
+    const targetEl = $('inp-target');
+    if (targetEl) {
+      targetEl.value = name;
+    }
+    const targetLabel = $('target-label');
+    if (targetLabel) {
+      targetLabel.textContent = escHtml(name);
+    }
+    ServicePanel.toggle();  // Close the panel
+  }
 
   // ── Wizard helpers ─────────────────────────────────────────────────────────
 
@@ -764,7 +776,7 @@
     init, toggle, _showTab,
     _runTest, _goStep2, _goStep3, _goStep4, _backToStep, _register,
     _editRow, _saveEdit, _cancelEdit,
-    _confirmRemove, _doRemove, _cancelRemove,
+    _confirmRemove, _doRemove, _cancelRemove, _selectService,
   };
 
 })();

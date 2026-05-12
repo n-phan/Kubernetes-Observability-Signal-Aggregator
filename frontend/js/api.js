@@ -172,12 +172,6 @@ async function runAnalyze() {
     };
   }
 
-  setStatus('loading');
-  setBusy(true);
-  // Swap the RCA panel for a loading view while the LLM is thinking.
-  const rcaEl = document.getElementById('rca-panel');
-  if (rcaEl) rcaEl.replaceWith(RcaPanel.loadingElement());
-
   try {
     const resp = await fetch(`${endpoint}/query`, {
       method:  'POST',

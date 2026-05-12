@@ -8,6 +8,7 @@ or vice versa?"
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta
 from enum import Enum
 from uuid import uuid4
@@ -66,27 +67,33 @@ def build_timeline(
         if not series.samples:
             continue
 
-        # Detect spikes: compare peak to baseline
-        if len(series.samples) > 1:
-            baseline = _percentile([s.value for s in series.samples], 25)
-            peak = max(s.value for s in series.samples)
+        numeric_samples = [
+            s for s in series.samples
+            if isinstance(s.value, (int, float)) and not math.isnan(float(s.value))
+        ]
+        if len(numeric_samples) < 2:
+            continue
 
-            if peak > baseline * 2:  # 2x baseline = notable spike
-                peak_sample = max(series.samples, key=lambda s: s.value)
-                events.append(
-                    TimelineEvent(
-                        timestamp=peak_sample.timestamp,
-                        event_type=EventType.METRIC_SPIKE,
-                        severity="warn",
-                        summary=f"Metric spike in {series.name}",
-                        details={
-                            "metric_name": series.name,
-                            "baseline_value": baseline,
-                            "peak_value": peak,
-                            "labels": series.labels,
-                        },
-                    )
+        # Detect spikes: compare peak to baseline
+        baseline = _percentile([float(s.value) for s in numeric_samples], 25)
+        peak = max(float(s.value) for s in numeric_samples)
+
+        if peak > baseline * 2:  # 2x baseline = notable spike
+            peak_sample = max(numeric_samples, key=lambda s: float(s.value))
+            events.append(
+                TimelineEvent(
+                    timestamp=peak_sample.timestamp,
+                    event_type=EventType.METRIC_SPIKE,
+                    severity="warn",
+                    summary=f"Metric spike in {series.name}",
+                    details={
+                        "metric_name": series.name,
+                        "baseline_value": baseline,
+                        "peak_value": peak,
+                        "labels": series.labels,
+                    },
                 )
+            )
 
     # --- Extract log events ---
     if logs.lines:
