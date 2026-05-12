@@ -566,6 +566,89 @@ main {
   border-radius: 10px; padding: 1px 7px; font-size: 10px; color: var(--text-dim); margin: 1px 0;
 }
 
+/* ── History dashboard (stat cards + per-failure-mode cards) ── */
+.hl-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 22px; }
+.hl-stat { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.hl-stat.warn { border-color: var(--warn-dim); }
+.hl-stat-n { font-size: 26px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; line-height: 1; }
+.hl-stat.warn .hl-stat-n { color: var(--warn); }
+.hl-stat-label { margin-top: 7px; font-size: 12px; color: var(--text); }
+.hl-stat-sub { margin-top: 2px; font-size: 10px; color: var(--text-muted); }
+
+.hl-cards-title { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; }
+.hl-cards { display: flex; flex-direction: column; gap: 10px; }
+.hl-card { background: var(--bg-panel); border: 1px solid var(--border); border-left: 3px solid var(--cyan); border-radius: 8px; padding: 12px 14px; }
+.hl-card.recurring { border-left-color: var(--warn); }
+.hl-card-head { display: flex; align-items: center; gap: 9px; }
+.hl-card.recurring .hl-card-head { cursor: pointer; }
+.hl-chev { width: 10px; font-size: 10px; color: var(--text-muted); transition: transform 0.15s; flex: none; }
+.hl-chev-spacer { visibility: hidden; }
+.hl-card.open .hl-chev { transform: rotate(90deg); }
+.hl-badge { font-size: 12px; font-weight: 600; color: var(--cyan); white-space: nowrap; flex: none; font-variant-numeric: tabular-nums; }
+.hl-card.recurring .hl-badge { color: var(--warn); }
+.hl-card-target { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--text); }
+.hl-card-when { margin-left: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; flex: none; }
+.hl-card-headline {
+  margin-top: 7px; font-size: 12px; color: var(--text-dim); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.hl-card.open .hl-card-headline { -webkit-line-clamp: unset; overflow: visible; }
+.hl-card-meta { margin-top: 9px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
+.hl-card-meta .hl-dot { color: var(--text-muted); }
+.hl-occ-list { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); display: none; }
+.hl-card.open .hl-occ-list { display: block; }
+.hl-occ { display: grid; grid-template-columns: 140px 52px 40px 1fr; gap: 9px; padding: 3px 0; font-size: 11px; }
+.hl-occ-when { color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hl-occ-err  { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.hl-occ-conf { color: var(--cyan); text-align: right; font-variant-numeric: tabular-nums; }
+.hl-occ-sum  { color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hl-card-sig { margin-top: 10px; font-size: 10px; color: var(--text-muted); letter-spacing: 0.04em; }
+
+.hl-occ { cursor: pointer; border-radius: 4px; }
+.hl-occ:hover { background: var(--bg-raised); }
+.hl-detail {
+  flex: none; cursor: pointer; font: inherit; font-size: 11px; white-space: nowrap;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: 6px; padding: 3px 9px; color: var(--cyan);
+}
+.hl-detail:hover { border-color: var(--border-lit); color: var(--accent); }
+
+/* ── History → occurrence detail modal ── */
+.hl-overlay {
+  position: fixed; inset: 0; z-index: 500;
+  background: rgba(3, 6, 11, 0.72);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 8vh 16px 16px;
+}
+.hl-modal {
+  background: var(--bg-panel); border: 1px solid var(--border-lit); border-radius: 10px;
+  width: min(640px, 100%); max-height: 84vh; display: flex; flex-direction: column;
+  overflow: hidden; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+.hl-modal-head {
+  display: flex; align-items: center; gap: 12px; flex: none;
+  padding: 13px 16px; border-bottom: 1px solid var(--border);
+}
+.hl-modal-title { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--text); }
+.hl-modal-close {
+  margin-left: auto; background: none; border: none; cursor: pointer;
+  font-size: 14px; line-height: 1; color: var(--text-muted);
+}
+.hl-modal-close:hover { color: var(--error); }
+.hl-modal-body { padding: 12px 16px 18px; overflow-y: auto; }
+.hl-d-row {
+  display: grid; grid-template-columns: 150px 1fr; gap: 10px; padding: 7px 0;
+  font-size: 12px; border-bottom: 1px solid rgba(30, 45, 69, 0.45);
+}
+.hl-d-row:last-child { border-bottom: none; }
+.hl-d-block { grid-template-columns: 1fr; gap: 4px; }
+.hl-d-key {
+  color: var(--text-muted); font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; padding-top: 2px;
+}
+.hl-d-val { color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.hl-d-mono { font-family: var(--mono); font-size: 11px; }
+
 /* ── Connection panel (Settings → API Endpoint & Namespace) ── */
 #connection-section { display: none; background: var(--bg); }
 #connection-section.visible { display: block; }
