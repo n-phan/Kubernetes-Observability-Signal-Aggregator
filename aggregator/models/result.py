@@ -44,6 +44,7 @@ class HistoryOccurrence(BaseModel):
 
     created_at: datetime
     rca_summary: str | None = None
+    rca_root_cause: str | None = None
     rca_confidence: float | None = None
 
 
