@@ -1599,8 +1599,8 @@ def _rca_scope(result: UnifiedResult) -> tuple[datetime, datetime]:
 def _incident_timestamps(result: UnifiedResult) -> list[datetime]:
     timestamps: list[datetime] = []
 
-    if result.timeline.events:
-        timestamps.extend(_as_utc_datetime(event.timestamp) for event in result.timeline.events)
+    if result.timeline:
+        timestamps.extend(_as_utc_datetime(event.timestamp) for event in result.timeline)
 
     for series in result.metrics.series:
         timestamps.extend(_metric_incident_timestamps(series))
