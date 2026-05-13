@@ -15,7 +15,8 @@ from aggregator.core.hermes_rca_agent import (
     Message,
     _message_text,
 )
-from aggregator.core.rca_analyzer import ANTHROPIC_API_URL, MODEL
+from aggregator.core.rca_analyzer import ANTHROPIC_API_URL, ANTHROPIC_MODEL
+from aggregator.models.query import LlmConfig
 from aggregator.models.followup import FollowUpMessage, FollowUpResponse
 from aggregator.models.result import UnifiedResult
 
@@ -105,11 +106,19 @@ class RcaFollowUpAssistant:
         *,
         hermes: HermesRCAAgent,
         anthropic_api_key: str | None,
-        anthropic_model: str = MODEL,
+        llm_provider: str = "anthropic",
+        anthropic_model: str = ANTHROPIC_MODEL,
+        openai_api_key: str | None = None,
+        openai_model: str = "gpt-5.5",
+        openai_api_url: str = "https://api.openai.com/v1/responses",
     ) -> None:
         self._hermes = hermes
         self._anthropic_api_key = anthropic_api_key
+        self._llm_provider = llm_provider
         self._anthropic_model = anthropic_model
+        self._openai_api_key = openai_api_key
+        self._openai_model = openai_model
+        self._openai_api_url = openai_api_url
         self._client = httpx.AsyncClient(timeout=60.0)
 
     async def answer(
@@ -118,12 +127,22 @@ class RcaFollowUpAssistant:
         incident: UnifiedResult,
         question: str,
         history: list[FollowUpMessage],
+        rca_backend: str | None = None,
+        llm: LlmConfig | None = None,
     ) -> FollowUpResponse:
         if _should_remind_scope(incident=incident, question=question, history=history):
             return FollowUpResponse(
                 answer=UNRELATED_FOLLOWUP_REMINDER,
                 provider=None,
                 fallback_used=False,
+            )
+
+        if rca_backend == "llm":
+            return await self._answer_with_configured_llm(
+                incident=incident,
+                question=question,
+                history=history,
+                llm=llm,
             )
 
         hermes_error: str | None = None
@@ -185,6 +204,86 @@ class RcaFollowUpAssistant:
             ),
         )
 
+    async def _answer_with_configured_llm(
+        self,
+        *,
+        incident: UnifiedResult,
+        question: str,
+        history: list[FollowUpMessage],
+        llm: LlmConfig | None,
+    ) -> FollowUpResponse:
+        provider = (llm.provider if llm and llm.provider else self._llm_provider).strip().lower()
+        try:
+            if provider in {"openai", "chatgpt"}:
+                api_key = (llm.api_key if llm and llm.api_key else self._openai_api_key) or None
+                if not api_key:
+                    return FollowUpResponse(
+                        answer="",
+                        provider=None,
+                        fallback_used=False,
+                        error=(
+                            "OpenAI follow-up is not configured "
+                            "(set OPENAI_API_KEY or save a key in Config LLM)."
+                        ),
+                    )
+                answer = await self._answer_with_openai(
+                    incident,
+                    question,
+                    history,
+                    api_key=api_key,
+                    model=llm.model if llm and llm.model else self._openai_model,
+                    url=llm.endpoint if llm and llm.endpoint else self._openai_api_url,
+                )
+                return FollowUpResponse(
+                    answer=answer.strip(),
+                    provider="openai",
+                    fallback_used=False,
+                )
+
+            if provider not in {"anthropic", "claude"}:
+                return FollowUpResponse(
+                    answer="",
+                    provider=None,
+                    fallback_used=False,
+                    error=(
+                        f"LLM follow-up provider '{provider}' is not supported yet; "
+                        "supported providers are Anthropic and OpenAI."
+                    ),
+                )
+
+            api_key = (llm.api_key if llm and llm.api_key else self._anthropic_api_key) or None
+            if not api_key:
+                return FollowUpResponse(
+                    answer="",
+                    provider=None,
+                    fallback_used=False,
+                    error=(
+                        "Anthropic follow-up is not configured "
+                        "(set ANTHROPIC_API_KEY or save a key in Config LLM)."
+                    ),
+                )
+            answer = await self._answer_with_anthropic(
+                incident,
+                question,
+                history,
+                api_key=api_key,
+                model=llm.model if llm and llm.model else self._anthropic_model,
+                url=llm.endpoint if llm and llm.endpoint else ANTHROPIC_API_URL,
+            )
+            return FollowUpResponse(
+                answer=answer.strip(),
+                provider="anthropic",
+                fallback_used=False,
+            )
+        except Exception as exc:
+            logger.warning("LLM follow-up failed: %s", exc)
+            return FollowUpResponse(
+                answer="",
+                provider=None,
+                fallback_used=False,
+                error=f"LLM follow-up failed: {exc}",
+            )
+
     async def close(self) -> None:
         await self._client.aclose()
         await self._hermes.close()
@@ -221,17 +320,21 @@ class RcaFollowUpAssistant:
         incident: UnifiedResult,
         question: str,
         history: list[FollowUpMessage],
+        *,
+        api_key: str | None = None,
+        model: str | None = None,
+        url: str = ANTHROPIC_API_URL,
     ) -> str:
         prompt = _build_anthropic_prompt(incident=incident, question=question, history=history)
         resp = await self._client.post(
-            ANTHROPIC_API_URL,
+            url,
             headers={
-                "x-api-key": self._anthropic_api_key,
+                "x-api-key": api_key or self._anthropic_api_key or "",
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
             json={
-                "model": self._anthropic_model,
+                "model": model or self._anthropic_model,
                 "max_tokens": 1200,
                 "messages": [{"role": "user", "content": prompt}],
             },
@@ -244,6 +347,33 @@ class RcaFollowUpAssistant:
             return _clean_answer(str(data["content"][0]["text"]))
         except (KeyError, IndexError, TypeError) as exc:
             raise ValueError(f"Unexpected Anthropic response shape: {data}") from exc
+
+    async def _answer_with_openai(
+        self,
+        incident: UnifiedResult,
+        question: str,
+        history: list[FollowUpMessage],
+        *,
+        api_key: str,
+        model: str,
+        url: str,
+    ) -> str:
+        prompt = _build_anthropic_prompt(incident=incident, question=question, history=history)
+        resp = await self._client.post(
+            url,
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "input": prompt,
+                "max_output_tokens": 1200,
+            },
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"OpenAI API {resp.status_code}: {resp.text[:300]}")
+        return _clean_answer(_extract_openai_followup_text(resp.json()))
 
 
 def _build_followup_messages(
@@ -505,3 +635,30 @@ def _clean_answer(raw: str) -> str:
     if answer.endswith("```"):
         answer = answer[:-3].strip()
     return answer
+
+
+def _extract_openai_followup_text(data: dict[str, Any]) -> str:
+    output_text = data.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text
+
+    parts: list[str] = []
+    output = data.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+
+    text = "".join(parts).strip()
+    if text:
+        return text
+    raise ValueError(f"Unexpected OpenAI response shape: {data}")

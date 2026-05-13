@@ -399,6 +399,8 @@ async def rca_followup(request: FollowUpRequest) -> FollowUpResponse:
         incident=request.incident,
         question=request.question,
         history=request.history,
+        rca_backend=request.rca_backend,
+        llm=request.llm,
     )
 
 
