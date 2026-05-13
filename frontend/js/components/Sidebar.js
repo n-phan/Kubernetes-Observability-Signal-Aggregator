@@ -65,9 +65,6 @@ const Sidebar = {
     document.getElementById('sb-llm-config').addEventListener('click', () => {
       if (window.LlmConfigPanel) LlmConfigPanel.toggle();
     });
-    document.getElementById('sb-env-config').addEventListener('click', () => {
-      if (window.EnvironmentPanel) EnvironmentPanel.toggle();
-    });
     document.getElementById('sb-watchdog-cta').addEventListener('click', () => {
       if (window.WatchdogPanel) WatchdogPanel.toggle();
     });
