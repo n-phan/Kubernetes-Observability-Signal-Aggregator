@@ -138,10 +138,12 @@ async function runQuery() {
     renderResult(data, false);
 
   } catch (err) {
+    console.error('[runQuery] failed:', err);
     setStatus('error');
     $('main').innerHTML = `
       <div class="error-msg-box animate-in">
         <strong>Query failed</strong><br/>${escHtml(err.message)}
+        <pre style="margin-top:8px;font-size:11px;opacity:0.7;white-space:pre-wrap">${escHtml(err.stack || '')}</pre>
       </div>
     `;
   } finally {

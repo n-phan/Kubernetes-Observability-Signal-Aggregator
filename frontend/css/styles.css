@@ -578,7 +578,41 @@ main {
 .hl-cards-title { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; }
 .hl-cards { display: flex; flex-direction: column; gap: 10px; }
 .hl-card { background: var(--bg-panel); border: 1px solid var(--border); border-left: 3px solid var(--cyan); border-radius: 8px; padding: 12px 14px; }
+.hl-card.hl-sev-p1    { border-left-color: var(--error); }
+.hl-card.hl-sev-p2    { border-left-color: var(--warn); }
+.hl-card.hl-sev-p3    { border-left-color: var(--cyan); }
+.hl-card.hl-sev-noise { border-left-color: var(--border-lit); opacity: 0.75; }
 .hl-card.recurring { border-left-color: var(--warn); }
+.hl-card.hl-sev-p1.recurring { border-left-color: var(--error); }
+
+.hl-sev-badge {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+  padding: 2px 6px; border-radius: 3px; flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.hl-sev-badge.hl-sev-p1    { background: var(--error-dim); color: var(--error); }
+.hl-sev-badge.hl-sev-p2    { background: var(--warn-dim);  color: var(--warn); }
+.hl-sev-badge.hl-sev-p3    { background: var(--info-dim);  color: var(--cyan); }
+.hl-sev-badge.hl-sev-noise { background: var(--bg-raised); color: var(--text-muted); }
+
+.hl-spark { display: inline-flex; align-items: center; color: var(--text-dim); flex: none; opacity: 0.85; }
+.hl-card.hl-sev-p1 .hl-spark { color: var(--error); }
+.hl-card.hl-sev-p2 .hl-spark { color: var(--warn); }
+.hl-card.hl-sev-p3 .hl-spark { color: var(--cyan); }
+
+.hl-low-signal { margin-top: 18px; }
+.hl-low-signal > summary {
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: 8px 0;
+  list-style: none;
+  user-select: none;
+}
+.hl-low-signal > summary::-webkit-details-marker { display: none; }
+.hl-low-signal > summary::before { content: '▸ '; color: var(--text-muted); }
+.hl-low-signal[open] > summary::before { content: '▾ '; }
 .hl-card-head { display: flex; align-items: center; gap: 9px; }
 .hl-card.recurring .hl-card-head { cursor: pointer; }
 .hl-chev { width: 10px; font-size: 10px; color: var(--text-muted); transition: transform 0.15s; flex: none; }

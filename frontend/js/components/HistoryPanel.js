@@ -32,7 +32,7 @@ class HistoryPanel {
         + `This looks like a <strong>recurring</strong> issue, not a new failure mode.`
       : `🆕 No prior record of this incident signature for this service — this appears to be a <strong>new</strong> failure mode.`;
 
-    const occHtml = (rec.occurrences || []).map(o => `
+    const occHtml = (rec.occurrences || []).filter(o => o && typeof o === 'object').map(o => `
       <div class="hist-row">
         <span class="hist-when">${escHtml(fmtDateTime(o.created_at))}</span>
         <span class="hist-conf">${o.rca_confidence != null ? Math.round(o.rca_confidence * 100) + '%' : '—'}</span>
@@ -66,6 +66,30 @@ function histAgo(iso) {
   if (s < 86400)     return `${Math.round(s / 3600)}h ago`;
   if (s < 7 * 86400) return `${Math.round(s / 86400)}d ago`;
   return fmtDateTime(iso);
+}
+
+// 24 hourly buckets covering [now-24h, now]: shows when occurrences happened
+// so you can tell flapping (lots of recent bars) from one-shot (single tall bar
+// far left/right). Bars are normalized to the card's own max.
+function historyOccurrenceSparkline(rows) {
+  const N = 24, W = 96, H = 18, gap = 1;
+  const barW = (W - gap * (N - 1)) / N;
+  const now = Date.now();
+  const buckets = new Array(N).fill(0);
+  for (const r of rows) {
+    const t = new Date(r.created_at).getTime();
+    if (!t) continue;
+    const hoursAgo = (now - t) / 3600000;
+    if (hoursAgo < 0 || hoursAgo >= N) continue;
+    buckets[N - 1 - Math.floor(hoursAgo)] += 1;
+  }
+  const max = Math.max(1, ...buckets);
+  const bars = buckets.map((v, i) => {
+    if (!v) return '';
+    const h = Math.max(2, Math.round((v / max) * H));
+    return `<rect x="${(i * (barW + gap)).toFixed(1)}" y="${H - h}" width="${barW.toFixed(1)}" height="${h}" fill="currentColor"/>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true">${bars}</svg>`;
 }
 
 const HistoryListPanel = {
@@ -166,27 +190,48 @@ const HistoryListPanel = {
       g.sort((a, b) => when(b) - when(a));            // newest occurrence first
       const latest = g[0], oldest = g[g.length - 1];
       const rca = g.find(r => r.rca_performed);
+      const kinds = (latest.correlation_kinds || '').split(',').filter(Boolean);
+      const errors = latest.error_count ?? 0;
+      const rcaRan = !!rca;
+      const count = g.length;
+      // Severity: P1 recurring + correlated, P2 has real signal, P3 light signal,
+      // noise = no correlations + no RCA + few errors + single occurrence (these
+      // are basically "I queried this service and saw a few errors" — not a
+      // failure mode worth surfacing at the top).
+      let severity;
+      if (count >= 2 && kinds.length > 0) severity = 'p1';
+      else if (kinds.length > 0 || rcaRan || errors >= 20) severity = 'p2';
+      else if (count >= 2 || errors >= 5) severity = 'p3';
+      else severity = 'noise';
       return {
         sig:       latest.signature || '?',
         target:    latest.target || '—',
         latestId:  latest.id,
-        count:     g.length,
+        count,
         lastSeen:  latest.last_seen || latest.created_at,
         firstSeen: oldest.created_at,
-        errors:    latest.error_count ?? 0,
+        errors,
         traces:    latest.error_trace_count ?? 0,
-        kinds:     (latest.correlation_kinds || '').split(',').filter(Boolean),
-        rcaRan:    !!rca,
+        kinds,
+        rcaRan,
         rcaConf:   rca && rca.rca_confidence != null ? rca.rca_confidence : null,
         headline:  (rca && (rca.rca_root_cause || rca.rca_summary)) || latest.rca_root_cause || latest.rca_summary || '',
         rows:      g,
+        severity,
       };
     });
-    // Recurring failure modes float to the top; ties broken by recency.
-    cards.sort((a, b) => (b.count - a.count) || (new Date(b.lastSeen) - new Date(a.lastSeen)));
+    // Sort by severity (P1 → P2 → P3 → noise), tie-broken by recurrence then recency.
+    const sevRank = { p1: 0, p2: 1, p3: 2, noise: 3 };
+    cards.sort((a, b) =>
+      (sevRank[a.severity] - sevRank[b.severity])
+      || (b.count - a.count)
+      || (new Date(b.lastSeen) - new Date(a.lastSeen))
+    );
+    const primary   = cards.filter(c => c.severity !== 'noise');
+    const lowSignal = cards.filter(c => c.severity === 'noise');
 
     const services  = new Set(rows.map(r => r.target)).size;
-    const recurring = cards.filter(c => c.count >= 2).length;
+    const highSev   = cards.filter(c => c.severity === 'p1' || c.severity === 'p2').length;
     const stat = (n, label, sub, tone) => `
       <div class="hl-stat${tone ? ' ' + tone : ''}">
         <div class="hl-stat-n">${n}</div>
@@ -195,12 +240,12 @@ const HistoryListPanel = {
       </div>`;
     const statsHtml = `<div class="hl-stats">
       ${stat(rows.length, 'Occurrences', 'logged')}
-      ${stat(cards.length, 'Failure modes', 'distinct signatures')}
+      ${stat(primary.length, 'Failure modes', `${lowSignal.length} low-signal hidden`)}
       ${stat(services, services === 1 ? 'Service' : 'Services', 'affected')}
-      ${stat(recurring, 'Recurring', '2+ occurrences', recurring ? 'warn' : '')}
+      ${stat(highSev, 'High severity', 'P1 + P2', highSev ? 'warn' : '')}
     </div>`;
 
-    const cardsHtml = cards.map(c => {
+    const renderCard = c => {
       const rec = c.count >= 2;
       const occHtml = c.rows.map(r => `
         <div class="hl-occ" data-occ="${r.id}" title="View full details">
@@ -212,30 +257,42 @@ const HistoryListPanel = {
       const rcaBit = c.rcaRan
         ? `RCA ${c.rcaConf != null ? Math.round(c.rcaConf * 100) + '%' : 'ran'}`
         : `<span class="hl-muted">RCA not run</span>`;
+      const sevLabel = { p1: 'P1', p2: 'P2', p3: 'P3', noise: '—' }[c.severity];
+      const spark = historyOccurrenceSparkline(c.rows);
       return `
-        <div class="hl-card${rec ? ' recurring' : ''}">
+        <div class="hl-card hl-sev-${c.severity}${rec ? ' recurring' : ''}">
           <div class="hl-card-head">
             ${rec ? '<span class="hl-chev">▸</span>' : '<span class="hl-chev hl-chev-spacer"></span>'}
+            <span class="hl-sev-badge hl-sev-${c.severity}">${sevLabel}</span>
             <span class="hl-badge">${rec ? '⚠' : '🆕'}&nbsp;×${c.count}</span>
             <span class="hl-card-target">${escHtml(c.target)}</span>
+            <span class="hl-spark" title="Occurrences in the last 24h">${spark}</span>
             <span class="hl-card-when">${escHtml(histAgo(c.lastSeen))}</span>
             <button class="hl-detail" data-occ="${c.latestId}" title="View full details">details ↗</button>
           </div>
           <div class="hl-card-headline">${escHtml(c.headline || '(no root-cause text recorded)')}</div>
           <div class="hl-card-meta">
             ${c.kinds.length ? c.kinds.map(k => `<span class="hl-chip">${escHtml(k)}</span>`).join(' ') : '<span class="hl-muted">no correlations</span>'}
-            <span class="hl-dot">·</span><span>errors ${c.errors}/${c.traces}</span>
+            <span class="hl-dot">·</span><span>${c.errors} log errors · ${c.traces} error traces</span>
             <span class="hl-dot">·</span><span>${rcaBit}</span>
             ${rec ? `<span class="hl-dot">·</span><span>first ${escHtml(histAgo(c.firstSeen))}</span>` : ''}
           </div>
           ${rec ? `<div class="hl-occ-list">${occHtml}</div>` : ''}
           <div class="hl-card-sig">signature ${escHtml(c.sig)}</div>
         </div>`;
-    }).join('');
+    };
+
+    const primaryHtml = primary.map(renderCard).join('');
+    const lowSignalHtml = lowSignal.map(renderCard).join('');
 
     return statsHtml
-      + `<div class="hl-cards-title">Failure modes <span class="hl-muted">— recurring first, then most recent</span></div>`
-      + `<div class="hl-cards">${cardsHtml}</div>`;
+      + `<div class="hl-cards-title">Failure modes <span class="hl-muted">— severity, then recurring, then recent</span></div>`
+      + `<div class="hl-cards">${primaryHtml || '<div class="hl-empty">No high-signal failure modes recorded.</div>'}</div>`
+      + (lowSignal.length ? `
+          <details class="hl-low-signal">
+            <summary>Low-signal queries (${lowSignal.length}) <span class="hl-muted">— single-shot queries with no correlations and no RCA; click to expand</span></summary>
+            <div class="hl-cards" style="margin-top:10px">${lowSignalHtml}</div>
+          </details>` : '');
   },
 
   // ── Occurrence detail modal ──────────────────────────────────────────────
