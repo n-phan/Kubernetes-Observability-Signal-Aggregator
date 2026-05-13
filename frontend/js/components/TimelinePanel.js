@@ -4,11 +4,16 @@ class TimelinePanel {
   }
 
   static create(events = []) {
-    if (!events || !events.length) return null;
-    return new TimelinePanel(events);
+    return new TimelinePanel(events || []);
   }
 
   _build(events) {
+    if (!events.length) {
+      return collapsible('Incident Timeline', `
+        <div class="sb-sub-empty">No timeline events found for this query window.</div>
+      `);
+    }
+
     const minOffset = Math.min(...events.map(e => Number(e.offset_seconds || 0)));
     const maxOffset = Math.max(...events.map(e => Number(e.offset_seconds || 0)));
     const span = Math.max(1, maxOffset - minOffset);

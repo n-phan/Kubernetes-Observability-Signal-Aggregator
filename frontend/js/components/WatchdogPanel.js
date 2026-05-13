@@ -11,7 +11,7 @@ const WatchdogPanel = {
         <button class="conn-close" onclick="WatchdogPanel.toggle()" title="Close">✕</button>
       </div>
       <div class="conn-body">
-        <div class="conn-note">Run continuous anomaly scans across registered services and send email alerts when configured.</div>
+        <div class="conn-note">Run continuous anomaly scans across registered services and send email alerts when SMTP is configured.</div>
         <div class="conn-form">
           <div class="field">
             <label for="wd-enabled">Enabled</label>
@@ -69,6 +69,7 @@ const WatchdogPanel = {
       $('wd-lookback').value = status.lookback_minutes ?? 15;
       $('wd-threshold').value = status.anomaly_threshold ?? 0.7;
       $('wd-status').textContent = `Status: ${status.enabled ? 'running' : 'stopped'} · alerts: ${status.alerts ?? 0}`;
+      document.dispatchEvent(new CustomEvent('obs:watchdog-status', { detail: { enabled: !!status.enabled } }));
 
       const alertsResp = await fetch(`${endpoint}/api/watchdog/alerts`);
       if (!alertsResp.ok) throw new Error(`HTTP ${alertsResp.status}`);

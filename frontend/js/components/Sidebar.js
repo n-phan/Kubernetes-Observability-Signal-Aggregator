@@ -47,8 +47,13 @@ const Sidebar = {
             <button class="sb-svc" id="sb-conn-config">API Endpoint &amp; Namespace</button>
             <button class="sb-svc" id="sb-env-config">Environment</button>
             <button class="sb-svc" id="sb-llm-config">Config LLM</button>
-            <button class="sb-svc" id="sb-watchdog">Watchdog</button>
           </div>
+        </div>
+        <div class="sb-cta-wrap">
+          <button class="sb-watchdog-cta" id="sb-watchdog-cta">
+            <span class="sb-watchdog-cta-label">Watchdog</span>
+            <span class="sb-watchdog-cta-pill" id="sb-watchdog-pill">OFF</span>
+          </button>
         </div>
       </nav>
     `;
@@ -64,7 +69,7 @@ const Sidebar = {
     document.getElementById('sb-env-config').addEventListener('click', () => {
       if (window.EnvironmentPanel) EnvironmentPanel.toggle();
     });
-    document.getElementById('sb-watchdog').addEventListener('click', () => {
+    document.getElementById('sb-watchdog-cta').addEventListener('click', () => {
       if (window.WatchdogPanel) WatchdogPanel.toggle();
     });
     document.getElementById('sb-head-history').addEventListener('click', () => {
@@ -79,6 +84,36 @@ const Sidebar = {
       const item = document.querySelector('.sb-item[data-key="service"]');
       if (item && item.classList.contains('open')) this.loadServices();
     });
+
+    document.addEventListener('obs:watchdog-status', (event) => {
+      this.setWatchdogIndicator(!!event?.detail?.enabled);
+    });
+
+    this.refreshWatchdogIndicator();
+    if (this._watchdogPoll) clearInterval(this._watchdogPoll);
+    this._watchdogPoll = setInterval(() => this.refreshWatchdogIndicator(), 10000);
+  },
+
+  _watchdogPoll: null,
+
+  setWatchdogIndicator(enabled) {
+    const cta = document.getElementById('sb-watchdog-cta');
+    const pill = document.getElementById('sb-watchdog-pill');
+    if (!cta || !pill) return;
+    cta.classList.toggle('on', enabled);
+    pill.textContent = enabled ? 'ON' : 'OFF';
+  },
+
+  async refreshWatchdogIndicator() {
+    const endpoint = ($('inp-endpoint')?.value || 'http://localhost:8080').trim().replace(/\/$/, '');
+    try {
+      const resp = await fetch(`${endpoint}/api/watchdog`);
+      if (!resp.ok) return;
+      const status = await resp.json();
+      this.setWatchdogIndicator(!!status.enabled);
+    } catch (_) {
+      // Keep last-known indicator state when backend is temporarily unreachable.
+    }
   },
 
   // Collapse the rail to an icon-only strip, or expand it back.

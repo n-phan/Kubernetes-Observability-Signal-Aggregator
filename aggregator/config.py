@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -85,7 +87,7 @@ class Settings(BaseSettings):
     watchdog_lookback_minutes: int = 15
     watchdog_anomaly_threshold: float = 0.7
 
-    # Notifications
+    # Notifications (email)
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_username: str | None = None
