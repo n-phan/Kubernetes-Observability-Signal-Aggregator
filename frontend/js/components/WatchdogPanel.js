@@ -46,7 +46,8 @@ const WatchdogPanel = {
 
           <div class="wd-notify-block">
             <div class="wd-notify-head">
-              <label><input id="wd-email-enabled" type="checkbox" /> Email (SMTP)</label>
+              <span class="wd-notify-label">Email (SMTP)</span>
+              <label class="wd-toggle"><input id="wd-email-enabled" type="checkbox" /><span class="wd-toggle-slider"></span></label>
             </div>
             <div class="wd-notify-fields">
               <div class="field"><label>SMTP host</label><input id="wd-email-host" type="text" placeholder="smtp.gmail.com" autocomplete="off" /></div>
@@ -61,8 +62,9 @@ const WatchdogPanel = {
 
           <div class="wd-notify-block">
             <div class="wd-notify-head">
-              <label><input id="wd-bark-enabled" type="checkbox" /> Bark (iOS push)</label>
+              <span class="wd-notify-label">Bark (iOS push)</span>
               <span class="wd-notify-hint">Server: https://api.day.app</span>
+              <label class="wd-toggle"><input id="wd-bark-enabled" type="checkbox" /><span class="wd-toggle-slider"></span></label>
             </div>
             <div class="wd-notify-fields">
               <div class="field wd-notify-wide"><label>Device key</label><input id="wd-bark-key" type="password" placeholder="from the Bark app" autocomplete="off" /></div>
@@ -84,8 +86,30 @@ const WatchdogPanel = {
 
     $('wd-apply').addEventListener('click', () => this.apply());
     $('wd-clear').addEventListener('click', () => this.clearAlerts());
+
+    // Same dirty-tracking pattern as the notification form: Apply is dim until
+    // any watchdog field is edited, then lights up.
+    ['wd-enabled','wd-interval','wd-lookback','wd-threshold'].forEach(id => {
+      $(id).addEventListener('input',  () => this._updateApplyDirty());
+      $(id).addEventListener('change', () => this._updateApplyDirty());
+    });
     $('wd-notify-save').addEventListener('click', () => this.saveNotifications());
     $('wd-notify-test').addEventListener('click', () => this.testNotifications());
+    // Enable/disable toggles auto-apply — flipping them is a single boolean
+    // change, no point requiring an extra Save click. Other fields still need
+    // Save (they're not committed until the form is filled out completely).
+    $('wd-email-enabled').addEventListener('change', () => this.saveNotifications());
+    $('wd-bark-enabled').addEventListener('change',  () => this.saveNotifications());
+
+    // Dirty tracking: Save button is dim until any text field is edited. The
+    // baseline is reset after every load/save so the button reflects "unsaved
+    // changes vs server" rather than "any input at all".
+    [
+      'wd-email-host','wd-email-port','wd-email-user','wd-email-pass',
+      'wd-email-from','wd-email-to','wd-email-starttls','wd-bark-key',
+    ].forEach(id => $(id).addEventListener('input', () => this._updateDirty()));
+    $('wd-email-starttls').addEventListener('change', () => this._updateDirty());
+    this._updateDirty();
 
     this._built = true;
   },
@@ -108,6 +132,8 @@ const WatchdogPanel = {
       $('wd-lookback').value = status.lookback_minutes ?? 15;
       $('wd-threshold').value = status.anomaly_threshold ?? 0.7;
       $('wd-status').textContent = `Status: ${status.enabled ? 'running' : 'stopped'} · alerts: ${status.alerts ?? 0}`;
+      this._cleanWatchdogSnapshot = this._watchdogSnapshot();
+      this._updateApplyDirty();
       document.dispatchEvent(new CustomEvent('obs:watchdog-status', { detail: { enabled: !!status.enabled } }));
 
       const alertsResp = await fetch(`${endpoint}/api/watchdog/alerts`);
@@ -168,6 +194,35 @@ const WatchdogPanel = {
   },
 
   // ── Notifications ────────────────────────────────────────────────────────
+  _formSnapshot() {
+    return JSON.stringify(this._collectNotifications());
+  },
+
+  _watchdogSnapshot() {
+    return JSON.stringify({
+      enabled:  $('wd-enabled').value,
+      interval: $('wd-interval').value,
+      lookback: $('wd-lookback').value,
+      threshold: $('wd-threshold').value,
+    });
+  },
+
+  _updateDirty() {
+    const btn = $('wd-notify-save');
+    if (!btn) return;
+    const dirty = this._cleanSnapshot !== undefined && this._formSnapshot() !== this._cleanSnapshot;
+    btn.classList.toggle('btn-dim', !dirty);
+    btn.disabled = !dirty;
+  },
+
+  _updateApplyDirty() {
+    const btn = $('wd-apply');
+    if (!btn) return;
+    const dirty = this._cleanWatchdogSnapshot !== undefined && this._watchdogSnapshot() !== this._cleanWatchdogSnapshot;
+    btn.classList.toggle('btn-dim', !dirty);
+    btn.disabled = !dirty;
+  },
+
   async _refreshNotifications(endpoint) {
     try {
       const resp = await fetch(`${endpoint}/api/watchdog/notifications`);
@@ -185,6 +240,8 @@ const WatchdogPanel = {
       const b = cfg.bark || {};
       $('wd-bark-enabled').checked = !!b.enabled;
       $('wd-bark-key').value       = b.device_key || '';
+      this._cleanSnapshot = this._formSnapshot();
+      this._updateDirty();
     } catch (_) { /* leave fields as-is */ }
   },
 
@@ -222,7 +279,7 @@ const WatchdogPanel = {
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       msg.className = 'conn-msg ok';
       msg.textContent = 'Saved ✓';
-      await this._refreshNotifications(endpoint);
+      await this._refreshNotifications(endpoint);   // refresh also re-snapshots
     } catch (err) {
       msg.className = 'conn-msg';
       msg.textContent = `Save failed: ${err.message}`;
