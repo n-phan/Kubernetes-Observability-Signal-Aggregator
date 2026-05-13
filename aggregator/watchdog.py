@@ -7,14 +7,11 @@ without requiring the operator to manually check the dashboard.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from pydantic import BaseModel, Field
-
-from aggregator.models.query import QueryRequest
 
 logger = logging.getLogger(__name__)
 
@@ -81,13 +78,8 @@ class WatchdogMonitor:
         anomaly_threshold: float = 0.7,
     ) -> None:
         """Start the watchdog monitor."""
-        # If already running, restart with fresh config to avoid duplicate loops.
-        if self._task and not self._task.done():
-            await self.stop()
-
         self.state.enabled = True
-        # Preserve order while removing duplicates.
-        self.state.active_services = list(dict.fromkeys(services))
+        self.state.active_services = services
         self.state.check_interval_seconds = check_interval_seconds
         self.state.lookback_minutes = lookback_minutes
         self.state.anomaly_threshold = anomaly_threshold
@@ -130,13 +122,11 @@ class WatchdogMonitor:
                 for service in self.state.active_services:
                     try:
                         result = await self.query_function(
-                            QueryRequest(
-                                target=service,
-                                namespace="default",
-                                start=window_start.isoformat(),
-                                end=window_end.isoformat(),
-                                include_rca=False,
-                            )
+                            target=service,
+                            namespace="default",
+                            window_start=window_start,
+                            window_end=window_end,
+                            include_rca=False,  # don't need RCA for watchdog
                         )
 
                         # Extract anomalies from correlations
@@ -166,9 +156,7 @@ class WatchdogMonitor:
                             self._alerts.insert(0, alert)  # newest first
                             for callback in self._callbacks:
                                 try:
-                                    result = callback(alert)
-                                    if inspect.isawaitable(result):
-                                        await result
+                                    callback(alert)
                                 except Exception as e:
                                     logger.error(f"Alert callback failed: {e}")
 
