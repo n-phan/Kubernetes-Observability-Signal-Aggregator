@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -28,6 +29,59 @@ _PROTECTED_SERVICES: frozenset[str] = frozenset(
     {"prometheus", "loki", "jaeger", "promtail", "aggregator", "node", "node-exporter",
      "service-a", "service-b"}
 )
+
+# ── Service health badge constants ─────────────────────────────────────────────
+
+# Must be ≥ 2m: circuit breaker on service-a causes error spikes to complete in
+# <1 second, so a 30s window expires before the 30s badge refresh fires.
+_HEALTH_WINDOW = "2m"
+
+# Services that use custom error counters instead of http_requests_total{status=~"5.."}
+_SERVICE_ERROR_METRICS: dict[str, str] = {
+    "service-c": "payment_errors_total",
+    "service-d": "inventory_lookup_errors_total",
+}
+
+
+async def _compute_service_health(client: httpx.AsyncClient, svc: str) -> str:
+    """Return 'healthy', 'degraded', 'critical', or 'unknown' for one service."""
+    try:
+        error_metric = _SERVICE_ERROR_METRICS.get(svc)
+        if error_metric:
+            error_expr = f'increase({error_metric}{{job="{svc}"}}[{_HEALTH_WINDOW}])'
+        else:
+            error_expr = f'increase(http_requests_total{{job="{svc}",status=~"5.."}}[{_HEALTH_WINDOW}])'
+        total_expr = f'increase(http_requests_total{{job="{svc}"}}[{_HEALTH_WINDOW}])'
+
+        errors_resp, total_resp = await asyncio.gather(
+            client.get(f"{settings.prometheus_url}/api/v1/query", params={"query": error_expr}),
+            client.get(f"{settings.prometheus_url}/api/v1/query", params={"query": total_expr}),
+        )
+
+        def _scalar(data: dict) -> float:
+            results = data.get("data", {}).get("result", [])
+            if not results:
+                return 0.0
+            try:
+                return max(0.0, float(results[0]["value"][1]))
+            except (ValueError, TypeError, IndexError):
+                return 0.0
+
+        errors = _scalar(errors_resp.json())
+        total = _scalar(total_resp.json())
+
+        if total <= 0:
+            # No traffic in window → idle but healthy; "unknown" is reserved for
+            # Prometheus unreachable (caught by the outer except).
+            return "healthy"
+        rate = errors / total
+        if rate >= 0.20:
+            return "critical"
+        if rate >= 0.01:
+            return "degraded"
+        return "healthy"
+    except Exception:
+        return "unknown"
 
 logging.basicConfig(level=settings.log_level.upper())
 logger = logging.getLogger(__name__)
@@ -232,6 +286,32 @@ async def get_service_registry() -> dict:
         return {}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/services/health")
+async def services_health() -> dict[str, str]:
+    """Return health status for every non-infra service based on Prometheus error rates."""
+    config_path = Path(settings.prometheus_config_path)
+    try:
+        with config_path.open() as f:
+            prom_cfg: dict = yaml.safe_load(f) or {}
+        service_names = [
+            j["job_name"]
+            for j in prom_cfg.get("scrape_configs", [])
+            if "job_name" in j and j["job_name"] not in _INFRA_SERVICES
+        ]
+    except Exception:
+        service_names = []
+
+    if not service_names:
+        return {}
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        statuses = await asyncio.gather(
+            *[_compute_service_health(client, svc) for svc in service_names]
+        )
+
+    return dict(zip(service_names, statuses))
 
 
 @app.delete("/services/{name}")

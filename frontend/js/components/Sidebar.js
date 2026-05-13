@@ -93,9 +93,12 @@ const Sidebar = {
     this.refreshWatchdogIndicator();
     if (this._watchdogPoll) clearInterval(this._watchdogPoll);
     this._watchdogPoll = setInterval(() => this.refreshWatchdogIndicator(), 10000);
+
+    this._startHealthRefresh();
   },
 
   _watchdogPoll: null,
+  _healthPoll: null,
 
   setWatchdogIndicator(enabled) {
     const cta = document.getElementById('sb-watchdog-cta');
@@ -186,16 +189,22 @@ const Sidebar = {
 
     const endpoint = ($('inp-endpoint').value || '').trim().replace(/\/$/, '');
     let services = [];
+    let health = {};
     try {
-      const resp = await fetch(`${endpoint}/services`);
-      if (resp.ok) services = await resp.json();
+      const [svcResp, hlResp] = await Promise.all([
+        fetch(`${endpoint}/services`),
+        fetch(`${endpoint}/services/health`),
+      ]);
+      if (svcResp.ok) services = await svcResp.json();
+      if (hlResp.ok) health = await hlResp.json();
     } catch (_) { /* leave empty */ }
 
     const current = $('inp-target') ? $('inp-target').value : '';
     const rows = services.length
-      ? services.map(s =>
-          `<button class="sb-svc${s === current ? ' active' : ''}" data-svc="${escHtml(s)}">${escHtml(s)}</button>`
-        ).join('')
+      ? services.map(s => {
+          const status = health[s] || 'unknown';
+          return `<button class="sb-svc${s === current ? ' active' : ''}" data-svc="${escHtml(s)}"><span class="sb-health-dot ${escHtml(status)}"></span>${escHtml(s)}</button>`;
+        }).join('')
       : `<div class="sb-sub-empty">No services registered</div>`;
 
     sub.innerHTML = rows + `<button class="sb-svc sb-manage" id="sb-manage">+ Manage services…</button>`;
@@ -208,6 +217,24 @@ const Sidebar = {
       const sp = document.getElementById('sp-section');
       if (window.ServicePanel && !(sp && sp.classList.contains('visible'))) ServicePanel.toggle();
     });
+  },
+
+  async refreshHealthBadges() {
+    const endpoint = ($('inp-endpoint')?.value || '').trim().replace(/\/$/, '');
+    let health = {};
+    try {
+      const resp = await fetch(`${endpoint}/services/health`);
+      if (resp.ok) health = await resp.json();
+    } catch (_) { return; }
+    document.querySelectorAll('#sb-sub-service .sb-svc[data-svc]').forEach(btn => {
+      const dot = btn.querySelector('.sb-health-dot');
+      if (dot) dot.className = `sb-health-dot ${health[btn.dataset.svc] || 'unknown'}`;
+    });
+  },
+
+  _startHealthRefresh() {
+    if (this._healthPoll) clearInterval(this._healthPoll);
+    this._healthPoll = setInterval(() => this.refreshHealthBadges(), 30000);
   },
 
   // Select a service as the active query target and immediately run a query

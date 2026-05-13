@@ -195,6 +195,21 @@ body {
 }
 .sb-manage:hover { color: var(--cyan); }
 
+.sb-health-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.sb-health-dot.healthy  { background: var(--accent); }
+.sb-health-dot.degraded { background: var(--warn); }
+.sb-health-dot.critical { background: var(--error); }
+.sb-health-dot.unknown  { background: var(--text-muted); }
+
 .sb-field {
   display: flex;
   flex-direction: column;

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
@@ -221,3 +222,47 @@ class TestRegisterEndpoint:
         assert "service-a" in job_names
         assert "service-b" in job_names
         assert "new-svc" in job_names
+
+
+# ---------------------------------------------------------------------------
+# GET /services/health
+# ---------------------------------------------------------------------------
+
+class TestServicesHealth:
+
+    async def test_returns_health_map_for_all_services(self, prom_yml: Path) -> None:
+        with patch("aggregator.main._compute_service_health", new=AsyncMock(return_value="healthy")):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.get("/services/health")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body.keys()) == {"service-a", "service-b"}
+        assert all(v == "healthy" for v in body.values())
+
+    async def test_propagates_mixed_statuses(self, prom_yml: Path) -> None:
+        status_map = {"service-a": "critical", "service-b": "healthy"}
+
+        async def _side(_client, svc: str) -> str:
+            return status_map[svc]
+
+        with patch("aggregator.main._compute_service_health", side_effect=_side):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.get("/services/health")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["service-a"] == "critical"
+        assert body["service-b"] == "healthy"
+
+    @pytest.mark.httpx_mock(assert_all_requests_were_expected=False)
+    async def test_prometheus_error_yields_unknown(self, prom_yml: Path, httpx_mock) -> None:
+        # httpx_mock with no registered responses causes every outbound httpx call
+        # to raise — _compute_service_health catches it and returns "unknown".
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/services/health")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body.keys()) == {"service-a", "service-b"}
+        assert all(v == "unknown" for v in body.values())
