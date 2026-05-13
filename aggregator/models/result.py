@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -7,7 +5,6 @@ from pydantic import BaseModel, Field
 
 from aggregator.models.signals import MetricsSignal, LogsSignal, TracesSignal
 from aggregator.models.rca import RCAResult
-from aggregator.core.timeline import IncidentTimeline
 
 
 class CorrelationEvent(BaseModel):
@@ -77,9 +74,6 @@ class UnifiedResult(BaseModel):
     correlations: list[CorrelationEvent] = Field(default_factory=list)
     rca: RCAResult = Field(default_factory=RCAResult)
     history: HistoryInfo | None = None  # populated only for notable queries
-    timeline: IncidentTimeline = Field(default_factory=lambda: IncidentTimeline())  # causal ordering of events
-
-    model_config = {"arbitrary_types_allowed": True}  # needed for timeline objects
 
     @property
     def has_any_errors(self) -> bool:

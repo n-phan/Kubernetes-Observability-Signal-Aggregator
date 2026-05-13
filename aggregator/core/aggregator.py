@@ -26,7 +26,6 @@ from aggregator.core.rca_analyzer import RCAAnalyzer
 from aggregator.core.rca_followup import RcaFollowUpAssistant
 from aggregator.core.suspicious_absence import SuspiciousAbsenceDetector
 from aggregator.models.followup import FollowUpMessage, FollowUpResponse
-from aggregator.core.timeline import build_timeline
 from aggregator.models.query import QueryRequest
 from aggregator.models.rca import LogEvidence, RCAResult
 from aggregator.models.result import CorrelationEvent, QueryMeta, UnifiedResult
@@ -161,9 +160,6 @@ class SignalAggregator:
         )
         correlations = _sort_correlation_events([*correlations, *absence_events])
 
-        # Build incident timeline (causal ordering of events)
-        timeline = build_timeline(metrics, logs, traces)
-
         # Build preliminary result so RCA can read it
         total_ms = (time.monotonic() - t0) * 1000
         result = UnifiedResult(
@@ -178,7 +174,6 @@ class SignalAggregator:
             logs=logs,
             traces=traces,
             correlations=correlations,
-            timeline=timeline,
         )
 
         # RCA — only runs when explicitly requested and error signals exist
