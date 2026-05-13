@@ -45,7 +45,6 @@ const Sidebar = {
           </button>
           <div class="sb-sub" id="sb-sub-setting">
             <button class="sb-svc" id="sb-conn-config">API Endpoint &amp; Namespace</button>
-            <button class="sb-svc" id="sb-env-config">Environment</button>
             <button class="sb-svc" id="sb-llm-config">Config LLM</button>
           </div>
         </div>
