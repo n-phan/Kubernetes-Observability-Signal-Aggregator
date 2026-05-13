@@ -11,7 +11,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -47,6 +47,10 @@ TOOL_LOG_LIMIT = 80
 TOOL_TRACE_LIMIT = 12
 HERMES_CONTENT_PREVIEW_CHARS = 300
 LATENCY_ANOMALY_THRESHOLD_S = 1.0
+LATENCY_ANOMALY_THRESHOLD_MS = 1_000
+ERROR_RATE_ANOMALY_THRESHOLD = 0.01
+RCA_SCOPE_CLUSTER_SECONDS = 2 * 60
+RCA_SCOPE_SINGLE_EVENT_PAD_SECONDS = 15
 MIN_TOOLS_FIRST_CONFIDENCE = 0.7
 MIN_TOOLS_FIRST_CONCRETE_EVIDENCE = 2
 _LATENCY_KEYWORDS = ("latency", "duration", "p99", "p95")
@@ -108,6 +112,11 @@ _RAW_EVIDENCE_MARKERS = (
     "get_logs:",
     "get_traces:",
     "get_correlations:",
+    "mcp_k8s_obs_get_aggregate:",
+    "mcp_k8s_obs_get_metrics:",
+    "mcp_k8s_obs_get_logs:",
+    "mcp_k8s_obs_get_traces:",
+    "mcp_k8s_obs_get_correlations:",
     "latest_value=",
     "peak_value=",
     "sample_count=",
@@ -260,6 +269,7 @@ class HermesRCAAgent:
 
     def _build_tools_first_prompt(self, result: UnifiedResult) -> str:
         meta = result.meta
+        scope_start, scope_end = _rca_scope(result)
         return (
             "You are a bounded autonomous root-cause-analysis agent for a local "
             "observability dashboard. Investigate only through the registered read-only "
@@ -267,18 +277,23 @@ class HermesRCAAgent:
             "run shell commands, edited code, restarted services, or queried systems "
             "outside those tools.\n\n"
             "Before returning a final RCA, you must first call the aggregator overview "
-            "tool k8s_obs:get_aggregate for the scoped target. After reviewing that "
-            "aggregate result, call k8s_obs:get_metrics, k8s_obs:get_logs, "
-            "k8s_obs:get_traces, or k8s_obs:get_correlations only if you still need "
-            "deeper evidence to make or verify the decision. These are native Hermes "
-            "tools, so use them internally and then return the final RCA in this chat "
-            "response's content as JSON.\n\n"
+            "tool mcp_k8s_obs_get_aggregate for the scoped target. After reviewing that "
+            "aggregate result, call mcp_k8s_obs_get_metrics, mcp_k8s_obs_get_logs, "
+            "mcp_k8s_obs_get_traces, or mcp_k8s_obs_get_correlations only if you still "
+            "need deeper evidence to make or verify the decision. These are native "
+            "Hermes MCP tools registered from the k8s_obs server, so use them internally "
+            "and then return the final RCA in this chat response's content as JSON.\n\n"
             "Scoped investigation target:\n"
             f"- target: {meta.target}\n"
             f"- namespace: {meta.namespace}\n"
-            f"- window_start: {meta.window_start.isoformat()}\n"
-            f"- window_end: {meta.window_end.isoformat()}\n\n"
+            f"- window_start: {scope_start.isoformat()}\n"
+            f"- window_end: {scope_end.isoformat()}\n"
+            f"- source_query_window_start: {meta.window_start.isoformat()}\n"
+            f"- source_query_window_end: {meta.window_end.isoformat()}\n\n"
             f"{_tools_first_exact_window_instruction(result)}\n\n"
+            "The source_query_window_* values are the broader event collection range "
+            "and are shown only for audit/debugging; do not use them as MCP tool "
+            "start/end for this RCA.\n\n"
             "Use only concrete values returned by the read-only tools. If evidence is weak "
             "or indirect, say so instead of inventing data. For log_evidence, copy only "
             "log lines returned by get_logs and use an empty array when logs are not "
@@ -1069,6 +1084,7 @@ def _build_tools_first_critique_prompt(
     related_services: list[str],
 ) -> str:
     meta = result.meta
+    scope_start, scope_end = _rca_scope(result)
     service_hint = (
         ", ".join(related_services)
         if related_services
@@ -1083,13 +1099,16 @@ def _build_tools_first_critique_prompt(
         "Scoped investigation target:\n"
         f"- target: {meta.target}\n"
         f"- namespace: {meta.namespace}\n"
-        f"- window_start: {meta.window_start.isoformat()}\n"
-        f"- window_end: {meta.window_end.isoformat()}\n"
+        f"- window_start: {scope_start.isoformat()}\n"
+        f"- window_end: {scope_end.isoformat()}\n"
+        f"- source_query_window_start: {meta.window_start.isoformat()}\n"
+        f"- source_query_window_end: {meta.window_end.isoformat()}\n"
         "- candidate related services already visible in the incident dossier "
         f"(trace.root_service or span.service_name, at most two): {service_hint}\n\n"
         f"{_tools_first_exact_window_instruction(result)} If you inspect a candidate "
         "related service, use that service as target but keep the same namespace, "
-        "start, and end.\n\n"
+        "start, and end. The source_query_window_* values are only the broader event "
+        "collection range; do not use them as MCP tool start/end.\n\n"
         "You may widen scope only to those candidate related services, and only within "
         "the same namespace and incident window. Do not inspect other services, "
         "namespaces, time windows, shell commands, code, deployments, or external "
@@ -1101,13 +1120,14 @@ def _build_tools_first_critique_prompt(
 
 
 def _tools_first_exact_window_instruction(result: UnifiedResult) -> str:
-    meta = result.meta
+    scope_start, scope_end = _rca_scope(result)
     return (
-        "For every k8s_obs:get_aggregate, k8s_obs:get_metrics, k8s_obs:get_logs, "
-        "k8s_obs:get_traces, and k8s_obs:get_correlations call, pass target, "
+        "For every mcp_k8s_obs_get_aggregate, mcp_k8s_obs_get_metrics, "
+        "mcp_k8s_obs_get_logs, mcp_k8s_obs_get_traces, and "
+        "mcp_k8s_obs_get_correlations call, pass target, "
         "namespace, start, and end. "
-        f"Set start exactly to {meta.window_start.isoformat()} and end exactly to "
-        f"{meta.window_end.isoformat()}. Do not use lookback_minutes for this scoped "
+        f"Set start exactly to {scope_start.isoformat()} and end exactly to "
+        f"{scope_end.isoformat()}. Do not use lookback_minutes for this scoped "
         "RCA when window_start and window_end are present."
     )
 
@@ -1525,14 +1545,15 @@ def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 
 def _window_minutes(result: UnifiedResult) -> int:
-    seconds = (result.meta.window_end - result.meta.window_start).total_seconds()
+    start, end = _rca_scope(result)
+    seconds = (end - start).total_seconds()
     return max(1, int(seconds // 60) or 1)
 
 
 def _tool_window(result: UnifiedResult, lookback_minutes: int) -> tuple[datetime, datetime]:
-    end = result.meta.window_end
+    scope_start, end = _rca_scope(result)
     requested_start = end - timedelta(minutes=lookback_minutes)
-    start = max(result.meta.window_start, requested_start)
+    start = max(scope_start, requested_start)
     return start, end
 
 
@@ -1554,11 +1575,108 @@ def _tool_window_from_args(
     return _tool_window(result, lookback_minutes)
 
 
+def _rca_scope(result: UnifiedResult) -> tuple[datetime, datetime]:
+    query_start = _as_utc_datetime(result.meta.window_start)
+    query_end = _as_utc_datetime(result.meta.window_end)
+    if query_start >= query_end:
+        return query_start, query_end
+
+    timestamps = _incident_timestamps(result)
+    if not timestamps:
+        return query_start, query_end
+
+    cluster = _latest_timestamp_cluster(timestamps)
+    start = min(cluster) - timedelta(seconds=RCA_SCOPE_SINGLE_EVENT_PAD_SECONDS)
+    end = max(cluster) + timedelta(seconds=RCA_SCOPE_SINGLE_EVENT_PAD_SECONDS)
+
+    start = max(query_start, start)
+    end = min(query_end, end)
+    if start >= end:
+        return query_start, query_end
+    return start, end
+
+
+def _incident_timestamps(result: UnifiedResult) -> list[datetime]:
+    timestamps: list[datetime] = []
+
+    if result.timeline.events:
+        timestamps.extend(_as_utc_datetime(event.timestamp) for event in result.timeline.events)
+
+    for series in result.metrics.series:
+        timestamps.extend(_metric_incident_timestamps(series))
+
+    timestamps.extend(
+        _as_utc_datetime(line.timestamp)
+        for line in result.logs.lines
+        if line.severity in (Severity.ERROR, Severity.CRITICAL, Severity.WARN)
+    )
+
+    for trace in result.traces.traces:
+        if trace.has_errors or trace.duration_ms >= LATENCY_ANOMALY_THRESHOLD_MS:
+            timestamps.extend(_as_utc_datetime(span.start_time) for span in trace.spans)
+
+    return sorted(set(timestamps))
+
+
+def _metric_incident_timestamps(series: Any) -> list[datetime]:
+    samples = [
+        sample
+        for sample in getattr(series, "samples", [])
+        if sample.value is not None
+    ]
+    if not samples:
+        return []
+
+    name = str(getattr(series, "name", "")).lower()
+    values = [float(sample.value) for sample in samples]
+    peak = max(values)
+    threshold: float | None = None
+    if "error" in name:
+        threshold = ERROR_RATE_ANOMALY_THRESHOLD
+    elif any(keyword in name for keyword in _LATENCY_KEYWORDS):
+        threshold = LATENCY_ANOMALY_THRESHOLD_S
+    elif "restart" in name:
+        threshold = 0.0
+
+    if threshold is not None:
+        candidates = [
+            sample
+            for sample in samples
+            if sample.value is not None and float(sample.value) > threshold
+        ]
+    else:
+        candidates = [
+            sample
+            for sample in samples
+            if sample.value is not None and float(sample.value) == peak and peak > 0
+        ]
+    return [_as_utc_datetime(sample.timestamp) for sample in candidates]
+
+
+def _latest_timestamp_cluster(timestamps: list[datetime]) -> list[datetime]:
+    if not timestamps:
+        return []
+    ordered = sorted(_as_utc_datetime(timestamp) for timestamp in timestamps)
+    cluster = [ordered[-1]]
+    for timestamp in reversed(ordered[:-1]):
+        if (cluster[0] - timestamp).total_seconds() > RCA_SCOPE_CLUSTER_SECONDS:
+            break
+        cluster.insert(0, timestamp)
+    return cluster
+
+
+def _as_utc_datetime(value: datetime) -> datetime:
+    if value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _parse_required_datetime(value: str, field_name: str) -> datetime:
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError(f"Invalid {field_name} timestamp: {value}") from exc
+    return _as_utc_datetime(parsed)
 
 
 def _severity_value(value: str) -> str:

@@ -26,8 +26,8 @@ from aggregator.core.rca_analyzer import RCAAnalyzer
 from aggregator.core.rca_followup import RcaFollowUpAssistant, _build_followup_messages
 from aggregator.core.suspicious_absence import SuspiciousAbsenceDetector
 from aggregator.output.formatter import RichFormatter
-from aggregator.models.followup import FollowUpMessage, FollowUpRequest
-from aggregator.models.query import QueryRequest, TimeWindow
+from aggregator.models.followup import FollowUpMessage, FollowUpRequest, FollowUpResponse
+from aggregator.models.query import LlmConfig, QueryRequest, TimeWindow
 from aggregator.models.rca import RCAResult
 from aggregator.models.result import CorrelationEvent, QueryMeta, UnifiedResult
 from aggregator.models.signals import (
@@ -363,7 +363,6 @@ class TestSignalAggregator:
                 confidence=0.7,
             )
         )
-        fallback.close = AsyncMock()
 
         agg = self._make_aggregator(logs=make_logs(error_count=5, total=10))
         agg._rca_analyzer = primary
@@ -378,6 +377,217 @@ class TestSignalAggregator:
         assert result.rca.log_evidence[0].severity == "error"
         primary.analyze.assert_awaited_once()
         fallback.analyze.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_rca_does_not_fall_back_when_primary_skips_without_error(self) -> None:
+        primary = MagicMock()
+        primary.analyze = AsyncMock(return_value=RCAResult(performed=False))
+        primary.close = AsyncMock()
+
+        fallback = MagicMock()
+        fallback.analyze = AsyncMock(
+            return_value=RCAResult(
+                performed=True,
+                summary="Fallback RCA",
+                root_cause="Fallback root cause",
+                confidence=0.7,
+            )
+        )
+        fallback.close = AsyncMock()
+
+        agg = self._make_aggregator(logs=make_logs(error_count=5, total=10))
+        agg._rca_analyzer = primary
+        agg._fallback_rca_analyzer = fallback
+
+        request = QueryRequest(target="my-api", include_rca=True)
+        result = await agg.query(request)
+
+        assert not result.rca.performed
+        primary.analyze.assert_awaited_once()
+        fallback.analyze.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_hermes_receives_no_browser_llm_config_and_fallback_receives_it(self) -> None:
+        primary = HermesRCAAgent(api_url="http://hermes.test/v1", model="hermes-agent")
+        primary.analyze = AsyncMock(
+            return_value=RCAResult(performed=False, error="Hermes unavailable")
+        )
+
+        fallback = RCAAnalyzer(api_key="anthropic-key", openai_api_key="server-openai-key")
+        fallback.analyze = AsyncMock(
+            return_value=RCAResult(
+                performed=True,
+                summary="Fallback RCA",
+                root_cause="Fallback root cause",
+                confidence=0.7,
+            )
+        )
+        fallback.close = AsyncMock()
+
+        llm = LlmConfig(
+            provider="chatgpt",
+            endpoint="https://openai.test/v1/responses",
+            model="gpt-test",
+            api_key="browser-openai-key",
+        )
+        agg = self._make_aggregator(logs=make_logs(error_count=5, total=10))
+        agg._rca_analyzer = primary
+        agg._fallback_rca_analyzer = fallback
+
+        request = QueryRequest(target="my-api", include_rca=True, llm=llm)
+        result = await agg.query(request)
+
+        assert result.rca.performed
+        assert len(primary.analyze.await_args.args) == 1
+        fallback.analyze.assert_awaited_once()
+        assert fallback.analyze.await_args.args[1] == llm
+        await primary.close()
+        await fallback.close()
+
+    @pytest.mark.asyncio
+    async def test_requested_llm_backend_uses_only_simple_analyzer(self) -> None:
+        hermes = MagicMock()
+        hermes.analyze = AsyncMock(
+            return_value=RCAResult(
+                performed=True,
+                summary="Hermes RCA",
+                root_cause="Hermes root cause",
+                confidence=0.9,
+            )
+        )
+        hermes.close = AsyncMock()
+
+        simple = RCAAnalyzer(api_key="anthropic-key", openai_api_key="server-openai-key")
+        simple.analyze = AsyncMock(
+            return_value=RCAResult(
+                performed=True,
+                summary="LLM RCA",
+                root_cause="LLM root cause",
+                confidence=0.8,
+            )
+        )
+        simple.close = AsyncMock()
+
+        llm = LlmConfig(provider="chatgpt", api_key="browser-openai-key")
+        agg = self._make_aggregator(logs=make_logs(error_count=5, total=10))
+        agg._rca_analyzer = hermes
+        agg._fallback_rca_analyzer = simple
+        agg._hermes_rca_analyzer = hermes
+        agg._simple_rca_analyzer = simple
+
+        request = QueryRequest(target="my-api", include_rca=True, rca_backend="llm", llm=llm)
+        result = await agg.query(request)
+
+        assert result.rca.performed
+        assert result.rca.summary == "LLM RCA"
+        hermes.analyze.assert_not_called()
+        simple.analyze.assert_awaited_once()
+        assert simple.analyze.await_args.args[1] == llm
+
+    @pytest.mark.asyncio
+    async def test_requested_hermes_backend_falls_back_to_simple_analyzer(self) -> None:
+        hermes = HermesRCAAgent(api_url="http://hermes.test/v1", model="hermes-agent")
+        hermes.analyze = AsyncMock(
+            return_value=RCAResult(performed=False, error="Hermes unavailable")
+        )
+
+        simple = RCAAnalyzer(api_key="anthropic-key", openai_api_key="server-openai-key")
+        simple.analyze = AsyncMock(
+            return_value=RCAResult(
+                performed=True,
+                summary="Fallback LLM RCA",
+                root_cause="Fallback LLM root cause",
+                confidence=0.75,
+            )
+        )
+        simple.close = AsyncMock()
+
+        llm = LlmConfig(provider="claude", api_key="browser-anthropic-key")
+        agg = self._make_aggregator(logs=make_logs(error_count=5, total=10))
+        agg._rca_analyzer = simple
+        agg._fallback_rca_analyzer = None
+        agg._hermes_rca_analyzer = hermes
+        agg._simple_rca_analyzer = simple
+
+        request = QueryRequest(target="my-api", include_rca=True, rca_backend="hermes", llm=llm)
+        result = await agg.query(request)
+
+        assert result.rca.performed
+        assert result.rca.summary == "Fallback LLM RCA"
+        assert len(hermes.analyze.await_args.args) == 1
+        simple.analyze.assert_awaited_once()
+        assert simple.analyze.await_args.args[1] == llm
+        await hermes.close()
+
+    @pytest.mark.asyncio
+    async def test_requested_llm_backend_does_not_fall_back_to_hermes(self) -> None:
+        hermes = MagicMock()
+        hermes.analyze = AsyncMock(
+            return_value=RCAResult(
+                performed=True,
+                summary="Hermes RCA",
+                root_cause="Hermes root cause",
+                confidence=0.9,
+            )
+        )
+        hermes.close = AsyncMock()
+
+        simple = MagicMock()
+        simple.analyze = AsyncMock(
+            return_value=RCAResult(performed=False, error="LLM unavailable")
+        )
+        simple.close = AsyncMock()
+
+        agg = self._make_aggregator(logs=make_logs(error_count=5, total=10))
+        agg._rca_analyzer = hermes
+        agg._fallback_rca_analyzer = simple
+        agg._hermes_rca_analyzer = hermes
+        agg._simple_rca_analyzer = simple
+
+        request = QueryRequest(target="my-api", include_rca=True, rca_backend="llm")
+        result = await agg.query(request)
+
+        assert not result.rca.performed
+        assert result.rca.error == "LLM unavailable"
+        simple.analyze.assert_awaited_once()
+        hermes.analyze.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_omitted_rca_backend_preserves_default_primary(self) -> None:
+        primary = MagicMock()
+        primary.analyze = AsyncMock(
+            return_value=RCAResult(
+                performed=True,
+                summary="Default RCA",
+                root_cause="Default root cause",
+                confidence=0.8,
+            )
+        )
+        primary.close = AsyncMock()
+
+        simple = MagicMock()
+        simple.analyze = AsyncMock(
+            return_value=RCAResult(
+                performed=True,
+                summary="LLM RCA",
+                root_cause="LLM root cause",
+                confidence=0.7,
+            )
+        )
+        simple.close = AsyncMock()
+
+        agg = self._make_aggregator(logs=make_logs(error_count=5, total=10))
+        agg._rca_analyzer = primary
+        agg._fallback_rca_analyzer = simple
+        agg._hermes_rca_analyzer = MagicMock()
+        agg._simple_rca_analyzer = simple
+
+        request = QueryRequest(target="my-api", include_rca=True)
+        result = await agg.query(request)
+
+        assert result.rca.summary == "Default RCA"
+        primary.analyze.assert_awaited_once()
+        simple.analyze.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rca_keeps_primary_error_when_fallback_skips(self) -> None:
@@ -507,6 +717,37 @@ class TestSignalAggregator:
         with pytest.raises(ValueError, match="RCA must be performed"):
             await agg.follow_up(incident=incident, question="What now?", history=[])
 
+    @pytest.mark.asyncio
+    async def test_follow_up_passes_backend_and_llm_config_to_assistant(self) -> None:
+        assistant = MagicMock()
+        assistant.answer = AsyncMock(
+            return_value=FollowUpResponse(
+                answer="Use the LLM follow-up path.",
+                provider="openai",
+                fallback_used=False,
+            )
+        )
+        assistant.close = AsyncMock()
+        agg = self._make_aggregator()
+        agg._followup_assistant = assistant
+        incident = self._make_aggregator(logs=make_logs(error_count=2, total=4))
+        result = await incident.query(QueryRequest(target="my-api", include_rca=False))
+        result.rca = RCAResult(performed=True, summary="RCA", root_cause="Root")
+        llm = LlmConfig(provider="chatgpt", api_key="browser-key")
+
+        response = await agg.follow_up(
+            incident=result,
+            question="What now?",
+            history=[],
+            rca_backend="llm",
+            llm=llm,
+        )
+
+        assert response.provider == "openai"
+        assistant.answer.assert_awaited_once()
+        assert assistant.answer.await_args.kwargs["rca_backend"] == "llm"
+        assert assistant.answer.await_args.kwargs["llm"] == llm
+
 
 # ---------------------------------------------------------------------------
 # RCA follow-up assistant tests
@@ -608,6 +849,64 @@ class TestRcaFollowUpAssistant:
         assert response.fallback_used
         assert "service-b dependents" in response.answer
         assert response.error == "Hermes returned an empty answer"
+
+    @pytest.mark.asyncio
+    async def test_llm_followup_uses_openai_without_calling_hermes(self) -> None:
+        assistant, agent = self._assistant()
+        agent._call_hermes = AsyncMock()
+        openai_response = MagicMock()
+        openai_response.status_code = 200
+        openai_response.json.return_value = {
+            "output_text": "Check the same service-b evidence from the RCA."
+        }
+        assistant._client.post = AsyncMock(return_value=openai_response)
+
+        response = await assistant.answer(
+            incident=self._incident(),
+            question="What should I check first?",
+            history=[],
+            rca_backend="llm",
+            llm=LlmConfig(
+                provider="chatgpt",
+                endpoint="https://openai.test/v1/responses",
+                model="gpt-test",
+                api_key="browser-openai-key",
+            ),
+        )
+        await assistant.close()
+
+        assert response.provider == "openai"
+        assert not response.fallback_used
+        assert "service-b evidence" in response.answer
+        agent._call_hermes.assert_not_called()
+        assert assistant._client.post.await_args.args[0] == "https://openai.test/v1/responses"
+        assert assistant._client.post.await_args.kwargs["json"]["model"] == "gpt-test"
+
+    @pytest.mark.asyncio
+    async def test_llm_followup_uses_anthropic_without_calling_hermes(self) -> None:
+        assistant, agent = self._assistant()
+        agent._call_hermes = AsyncMock()
+        anthropic_response = MagicMock()
+        anthropic_response.status_code = 200
+        anthropic_response.json.return_value = {
+            "content": [{"text": "The blast radius is limited to service-b callers."}]
+        }
+        assistant._client.post = AsyncMock(return_value=anthropic_response)
+
+        response = await assistant.answer(
+            incident=self._incident(),
+            question="What's the blast radius?",
+            history=[],
+            rca_backend="llm",
+            llm=LlmConfig(provider="claude", api_key="browser-anthropic-key"),
+        )
+        await assistant.close()
+
+        assert response.provider == "anthropic"
+        assert not response.fallback_used
+        assert "service-b callers" in response.answer
+        agent._call_hermes.assert_not_called()
+        assert assistant._client.post.await_args.kwargs["headers"]["x-api-key"] == "browser-anthropic-key"
 
     @pytest.mark.asyncio
     async def test_hermes_failure_without_anthropic_key_returns_clear_error(self) -> None:
@@ -1461,13 +1760,13 @@ class TestHermesRCAAgent:
         assert f"end exactly to {result.meta.window_end.isoformat()}" in prompt
         assert "pass target, namespace, start, and end" in prompt
         assert "Do not use lookback_minutes for this scoped RCA" in prompt
-        assert "must first call the aggregator overview tool k8s_obs:get_aggregate" in prompt
+        assert "must first call the aggregator overview tool mcp_k8s_obs_get_aggregate" in prompt
         assert "After reviewing that aggregate result" in prompt
         assert "only if you still need deeper evidence" in prompt
-        assert "k8s_obs:get_metrics" in prompt
-        assert "k8s_obs:get_logs" in prompt
-        assert "k8s_obs:get_traces" in prompt
-        assert "k8s_obs:get_correlations" in prompt
+        assert "mcp_k8s_obs_get_metrics" in prompt
+        assert "mcp_k8s_obs_get_logs" in prompt
+        assert "mcp_k8s_obs_get_traces" in prompt
+        assert "mcp_k8s_obs_get_correlations" in prompt
         assert "native Hermes tools" in prompt
         assert "chat response's content as JSON" in prompt
         assert "human-readable evidence" in prompt
@@ -2123,6 +2422,120 @@ class TestHermesRCAAgent:
         assert actual_end == end
 
     @pytest.mark.asyncio
+    async def test_tool_calls_derive_tight_scope_from_broad_event_query(self) -> None:
+        query_start = datetime(2024, 1, 1, 10, 0, tzinfo=timezone.utc)
+        query_end = datetime(2024, 1, 1, 10, 30, tzinfo=timezone.utc)
+        incident_at = query_end - timedelta(seconds=20)
+        result = self._result_with_incident()
+        result.meta.window_start = query_start
+        result.meta.window_end = query_end
+        result.metrics = MetricsSignal(
+            series=[
+                MetricSeries(
+                    name="http_latency_p99",
+                    labels={"handler": "/data"},
+                    samples=[
+                        MetricSample(timestamp=query_start, value=0.1),
+                        MetricSample(timestamp=incident_at, value=2.2),
+                    ],
+                )
+            ]
+        )
+        result.logs = LogsSignal()
+        result.traces = TracesSignal()
+        result.timeline = build_timeline(result.metrics, result.logs, result.traces)
+        loki = MagicMock()
+        loki.query_logs = AsyncMock(return_value=make_logs(error_count=0, total=0))
+        agent = self._agent(loki=loki)
+
+        await agent._run_tool("get_logs", {}, result)
+        prompt = agent._build_prompt(result)
+        await agent.close()
+
+        _, _, actual_start, actual_end = loki.query_logs.await_args.args
+        assert actual_start == incident_at - timedelta(seconds=15)
+        assert actual_end == query_end
+        assert f"Set start exactly to {actual_start.isoformat()}" in prompt
+        assert f"end exactly to {actual_end.isoformat()}" in prompt
+        assert f"source_query_window_start: {query_start.isoformat()}" in prompt
+        assert f"source_query_window_end: {query_end.isoformat()}" in prompt
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_prefer_new_latency_over_old_error_in_back_to_back_demo(self) -> None:
+        query_start = datetime(2024, 1, 1, 10, 0, tzinfo=timezone.utc)
+        query_end = datetime(2024, 1, 1, 10, 3, 8, tzinfo=timezone.utc)
+        old_error_at = query_start + timedelta(seconds=10)
+        latency_at = query_end - timedelta(seconds=20)
+        result = self._result_with_incident()
+        result.meta.window_start = query_start
+        result.meta.window_end = query_end
+        result.metrics = MetricsSignal(
+            series=[
+                MetricSeries(
+                    name="http_error_rate",
+                    labels={"handler": "/data"},
+                    samples=[
+                        MetricSample(timestamp=old_error_at, value=0.4),
+                        MetricSample(timestamp=latency_at, value=0.0),
+                    ],
+                ),
+                MetricSeries(
+                    name="http_latency_p99",
+                    labels={"handler": "/data"},
+                    samples=[
+                        MetricSample(timestamp=old_error_at, value=0.1),
+                        MetricSample(timestamp=latency_at, value=2.0),
+                    ],
+                ),
+            ]
+        )
+        result.logs = LogsSignal(
+            lines=[
+                LogLine(
+                    timestamp=old_error_at,
+                    message="DatabaseConnectionError: connection pool exhausted",
+                    severity=Severity.ERROR,
+                )
+            ]
+        )
+        result.logs.compute_counts()
+        result.traces = TracesSignal()
+        result.timeline = build_timeline(result.metrics, result.logs, result.traces)
+        loki = MagicMock()
+        loki.query_logs = AsyncMock(return_value=LogsSignal())
+        agent = self._agent(loki=loki)
+
+        await agent._run_tool("get_logs", {}, result)
+        await agent.close()
+
+        _, _, actual_start, actual_end = loki.query_logs.await_args.args
+        assert actual_start == latency_at - timedelta(seconds=15)
+        assert actual_end == query_end
+        assert actual_start > old_error_at
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_keep_short_demo_window_exact(self) -> None:
+        start = datetime(2024, 1, 1, 10, 0, tzinfo=timezone.utc)
+        end = start + timedelta(seconds=4)
+        result = self._result_with_incident()
+        result.meta.window_start = start
+        result.meta.window_end = end
+        result.metrics = MetricsSignal()
+        result.logs = LogsSignal()
+        result.traces = TracesSignal()
+        result.timeline = build_timeline(result.metrics, result.logs, result.traces)
+        loki = MagicMock()
+        loki.query_logs = AsyncMock(return_value=make_logs(error_count=0, total=0))
+        agent = self._agent(loki=loki)
+
+        await agent._run_tool("get_logs", {}, result)
+        await agent.close()
+
+        _, _, actual_start, actual_end = loki.query_logs.await_args.args
+        assert actual_start == start
+        assert actual_end == end
+
+    @pytest.mark.asyncio
     async def test_tool_calls_anchor_explicit_lookback_to_incident_end(self) -> None:
         window_start = datetime(2024, 1, 1, 10, 0, tzinfo=timezone.utc)
         window_end = datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc)
@@ -2477,6 +2890,26 @@ class TestTimeWindow:
         )
         window = req.resolve_window()
         assert window.duration_seconds == 3600.0
+
+    def test_query_request_rejects_equal_start_end(self) -> None:
+        with pytest.raises(ValueError, match="start must be before end"):
+            QueryRequest(
+                target="svc",
+                start="2024-01-01T10:00:00Z",
+                end="2024-01-01T10:00:00Z",
+            )
+
+    def test_query_request_rejects_reversed_start_end(self) -> None:
+        with pytest.raises(ValueError, match="start must be before end"):
+            QueryRequest(
+                target="svc",
+                start="2024-01-01T11:00:00Z",
+                end="2024-01-01T10:00:00Z",
+            )
+
+    def test_query_request_rejects_invalid_rca_backend(self) -> None:
+        with pytest.raises(ValueError):
+            QueryRequest(target="svc", include_rca=True, rca_backend="other")
 
     def test_resolve_window_falls_back_to_default_lookback(self) -> None:
         req = QueryRequest(target="svc")
