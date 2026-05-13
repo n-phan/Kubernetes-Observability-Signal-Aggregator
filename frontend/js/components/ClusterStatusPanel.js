@@ -150,19 +150,18 @@ const ClusterStatusPanel = {
     const r = 38;
     const circ = 2 * Math.PI * r;
     const offset = circ * (1 - clamped / 100);
-    const color = usageColor(valid ? pct : null);
+    const tone = usageTone(valid ? pct : null);
     return `
       <div class="gauge" title="${escHtml(label)}: ${valid ? pct.toFixed(2) + '%' : 'no data'}">
         <svg class="gauge-svg" viewBox="0 0 100 100">
           <circle class="gauge-track" cx="50" cy="50" r="${r}"></circle>
-          <circle class="gauge-arc" cx="50" cy="50" r="${r}"
-                  stroke="${color}"
+          <circle class="gauge-arc tone-${tone}" cx="50" cy="50" r="${r}"
                   stroke-dasharray="${circ.toFixed(2)}"
                   stroke-dashoffset="${offset.toFixed(2)}"
                   transform="rotate(-90 50 50)"></circle>
         </svg>
         <div class="gauge-center">
-          <span class="gauge-pct" style="color:${color}">${valid ? pct.toFixed(1) + '%' : '—'}</span>
+          <span class="gauge-pct tone-${tone}">${valid ? pct.toFixed(1) + '%' : '—'}</span>
           <span class="gauge-label">${escHtml(label)}</span>
         </div>
         <div class="gauge-sub">${escHtml(sub || '')}</div>

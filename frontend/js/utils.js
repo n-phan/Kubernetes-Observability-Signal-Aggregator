@@ -57,20 +57,35 @@ function severityClass(sev) {
 }
 
 // ── RCA confidence → colour ───────────────────────────────────────────────────
-// Green ≥ 80%, amber ≥ 50%, red below that.
+// "OK" tone follows the active theme: neon green in dark mode, blue in light mode
+// so the cluster gauges blend with the 1Panel-style palette.
+function _okTone() {
+  return document.body.classList.contains('light') ? '#2563eb' : '#3dffa0';
+}
+
+// Green/blue ≥ 80%, amber ≥ 50%, red below that.
 function confidenceColor(c) {
-  if (c >= 0.8) return '#3dffa0';
+  if (c >= 0.8) return _okTone();
   if (c >= 0.5) return '#ffb347';
   return '#ff4e6a';
 }
 
 // ── Resource usage % → colour ────────────────────────────────────────────────
-// Green < 70%, amber < 85%, red at/above that. Used by the cluster gauges.
+// OK < 70%, amber < 85%, red at/above that. Used by the cluster gauges.
 function usageColor(pct) {
   if (pct == null || isNaN(pct)) return '#5a7a9a';
-  if (pct < 70) return '#3dffa0';
+  if (pct < 70) return _okTone();
   if (pct < 85) return '#ffb347';
   return '#ff4e6a';
+}
+
+// Same thresholds as usageColor, but returns a semantic tone class so the
+// stylesheet can recolour gauges live when the theme toggles (no re-query).
+function usageTone(pct) {
+  if (pct == null || isNaN(pct)) return 'nodata';
+  if (pct < 70) return 'ok';
+  if (pct < 85) return 'warn';
+  return 'bad';
 }
 
 // ── Byte / rate formatters ───────────────────────────────────────────────────
