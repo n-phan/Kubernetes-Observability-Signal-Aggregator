@@ -698,7 +698,7 @@ main {
 .hl-card-meta .hl-dot { color: var(--text-muted); }
 .hl-occ-list { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); display: none; }
 .hl-card.open .hl-occ-list { display: block; }
-.hl-occ { display: grid; grid-template-columns: 140px 52px 40px 1fr; gap: 9px; padding: 3px 0; font-size: 13px; }
+.hl-occ { display: grid; grid-template-columns: 175px 52px 40px 1fr; gap: 9px; padding: 3px 0; font-size: 13px; }
 .hl-occ-when { color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .hl-occ-err  { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .hl-occ-conf { color: var(--cyan); text-align: right; font-variant-numeric: tabular-nums; }
