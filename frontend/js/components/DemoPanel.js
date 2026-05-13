@@ -31,7 +31,7 @@
       display: block;
     }
     .demo-panel {
-      background: var(--surface, #0f1117);
+      background: var(--bg-panel, #0f1117);
       border: 1px solid var(--border, #1e2330);
       border-radius: 4px;
       overflow: hidden;
@@ -42,7 +42,7 @@
       gap: 12px;
       padding: 10px 16px;
       border-bottom: 1px solid var(--border, #1e2330);
-      background: var(--surface-raised, #13161f);
+      background: var(--bg-raised, #13161f);
     }
     .demo-panel-title {
       font-family: 'IBM Plex Mono', monospace;
@@ -100,7 +100,7 @@
       background: var(--border, #1e2330);
     }
     .demo-scenario-card {
-      background: var(--surface, #0f1117);
+      background: var(--bg-panel, #0f1117);
       padding: 16px;
       display: flex;
       flex-direction: column;
@@ -133,7 +133,7 @@
       border-top: 1px solid var(--border, #1e2330);
     }
     .demo-scenario-meta span {
-      color: var(--blue, #38d4f5);
+      color: var(--cyan, #38d4f5);
     }
     .demo-btn-run {
       font-family: 'IBM Plex Mono', monospace;
@@ -148,7 +148,7 @@
       transition: background 0.15s, border-color 0.15s;
     }
     .demo-btn-run:hover:not(:disabled) {
-      background: rgba(61,255,160,0.06);
+      background: rgb(var(--accent-rgb, 61 255 160) / 0.08);
       border-color: var(--accent, #3dffa0);
     }
     .demo-btn-run:disabled {
@@ -192,7 +192,7 @@
     .demo-detail-setup {
       margin-top: 10px;
       padding: 8px 12px;
-      border-left: 2px solid var(--blue, #38d4f5);
+      border-left: 2px solid var(--cyan, #38d4f5);
       background: rgba(56,212,245,0.04);
       font-size: 14px;
       color: var(--text-dim, #5a6175);
@@ -204,7 +204,7 @@
       font-weight: 600;
       letter-spacing: 0.1em;
       text-transform: uppercase;
-      color: var(--blue, #38d4f5);
+      color: var(--cyan, #38d4f5);
       margin-bottom: 4px;
     }
     /* ── Output ── */
@@ -246,11 +246,11 @@
     .demo-log-line.ok   .msg { color: var(--accent, #3dffa0); }
     .demo-log-line.err  .msg { color: #ff4e6a; }
     .demo-log-line.info .msg { color: var(--text, #c8cdd8); }
-    .demo-log-line.done .msg { color: var(--blue, #38d4f5); }
+    .demo-log-line.done .msg { color: var(--cyan, #38d4f5); }
     .demo-hint {
       font-family: 'IBM Plex Mono', monospace;
       font-size: 13px;
-      color: var(--blue, #38d4f5);
+      color: var(--cyan, #38d4f5);
       padding: 10px 16px;
       border-top: 1px solid var(--border, #1e2330);
       background: rgba(56,212,245,0.04);
