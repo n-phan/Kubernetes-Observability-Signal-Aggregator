@@ -45,7 +45,6 @@ const Sidebar = {
           </button>
           <div class="sb-sub" id="sb-sub-setting">
             <button class="sb-svc" id="sb-conn-config">API Endpoint &amp; Namespace</button>
-            <button class="sb-svc" id="sb-env-config">Environment</button>
             <button class="sb-svc" id="sb-llm-config">Config LLM</button>
           </div>
         </div>
@@ -65,9 +64,6 @@ const Sidebar = {
     });
     document.getElementById('sb-llm-config').addEventListener('click', () => {
       if (window.LlmConfigPanel) LlmConfigPanel.toggle();
-    });
-    document.getElementById('sb-env-config').addEventListener('click', () => {
-      if (window.EnvironmentPanel) EnvironmentPanel.toggle();
     });
     document.getElementById('sb-watchdog-cta').addEventListener('click', () => {
       if (window.WatchdogPanel) WatchdogPanel.toggle();
