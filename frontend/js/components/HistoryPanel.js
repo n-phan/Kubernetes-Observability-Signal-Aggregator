@@ -21,16 +21,34 @@ class HistoryPanel {
     const rec = history.recurrence || {};
     const count = rec.count || 0;
     const recurring = count > 0;
-    const tone = recurring ? 'var(--warn)' : 'var(--cyan)';
-
+    const ongoing = !!rec.ongoing;
+    // Three states: recurring (prior occurrences exist) > ongoing (folded into
+    // the current open occurrence) > new (no history at all). Color and copy
+    // diverge so the user doesn't see "new failure mode" when there clearly is
+    // a matching open record.
+    let state, tone, label, headline;
     const last = fmtDateTime(rec.last_seen);
     const first = fmtDateTime(rec.first_seen);
-
-    const headline = recurring
-      ? `⚠ A similar incident was recorded <strong>${count}</strong> time${count === 1 ? '' : 's'} before for this service — `
+    const started = fmtDateTime(rec.current_started_at);
+    if (recurring) {
+      state = 'recurring';
+      tone = 'var(--warn)';
+      label = `seen ${count}× before`;
+      headline = `⚠ A similar incident was recorded <strong>${count}</strong> time${count === 1 ? '' : 's'} before for this service — `
         + `last on <strong>${escHtml(last)}</strong>${count > 1 ? `, first on ${escHtml(first)}` : ''}. `
-        + `This looks like a <strong>recurring</strong> issue, not a new failure mode.`
-      : `🆕 No prior record of this incident signature for this service — this appears to be a <strong>new</strong> failure mode.`;
+        + `This looks like a <strong>recurring</strong> issue, not a new failure mode.`;
+    } else if (ongoing) {
+      state = 'ongoing';
+      tone = 'var(--cyan)';
+      label = 'same ongoing incident';
+      headline = `🔄 This is the <strong>same ongoing incident</strong> as your earlier query — folded into the open occurrence that started <strong>${escHtml(started)}</strong>. `
+        + `A genuinely new occurrence will only be logged once activity goes quiet for 10 minutes.`;
+    } else {
+      state = 'new';
+      tone = 'var(--cyan)';
+      label = 'first occurrence';
+      headline = `🆕 No prior record of this incident signature for this service — this appears to be a <strong>new</strong> failure mode.`;
+    }
 
     const occHtml = (rec.occurrences || []).filter(o => o && typeof o === 'object').map(o => `
       <div class="hist-row">
@@ -42,7 +60,7 @@ class HistoryPanel {
 
     const header = `
       <span class="panel-title" style="color:${tone}">Recurrence</span>
-      <span class="panel-count">${recurring ? `seen ${count}× before` : 'first occurrence'} ▾</span>
+      <span class="panel-count">${escHtml(label)} ▾</span>
     `;
     const body = `
       <div class="hist-headline">${headline}</div>

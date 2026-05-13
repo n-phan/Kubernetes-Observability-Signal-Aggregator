@@ -285,11 +285,18 @@ def _record_sync(row: dict) -> RecurrenceInfo:
             )
             for r in prior[:_OCCURRENCES_IN_RESPONSE]
         ]
+        # If we merged into an existing row, surface that — without it the UI
+        # can't distinguish "first time ever" from "still the same incident".
+        current_started_at = None
+        if merge_id is not None and rows:
+            current_started_at = _parse_dt(rows[0]["created_at"])
         recurrence = RecurrenceInfo(
             count=len(prior),
             first_seen=_parse_dt(prior[-1]["created_at"]) if prior else None,
             last_seen=(_parse_dt(prior[0]["last_seen"]) or _parse_dt(prior[0]["created_at"])) if prior else None,
             occurrences=occurrences,
+            ongoing=merge_id is not None,
+            current_started_at=current_started_at,
         )
 
         if merge_id is not None:
