@@ -92,7 +92,10 @@ elif have docker && [ -f "$SCRIPT_DIR/docker-compose.yml" ]; then
 else
   die "Demo images not available. Put obs-images.tar next to this script, or run from the repo root on a host with Docker. See the comment block at the top of this script."
 fi
-sudo k3s ctr images ls 2>/dev/null | grep -q 'obs/aggregator:dev' \
+# Capture into a variable first so `grep -q` closing stdin early doesn't blow
+# up the pipeline under `set -o pipefail` (SIGPIPE → 141 → die false-positive).
+ctr_images=$(sudo k3s ctr images ls 2>/dev/null || true)
+echo "$ctr_images" | grep -q 'obs/aggregator:dev' \
   || die "Image import failed — obs/aggregator:dev not found in containerd."
 
 # ── 5. Deploy demo workloads + aggregator ─────────────────────────────────
