@@ -109,6 +109,13 @@ class Settings(BaseSettings):
     mailgun_domain: str | None = None     # e.g. "observability.local"
     mailgun_api_key: str | None = None
 
+    # ── Watchdog Mode ────────────────────────────────────────────────────
+    # Optional: Continuously monitor services for anomalies
+    watchdog_enabled: bool = False
+    watchdog_interval_seconds: int = 60
+    watchdog_lookback_minutes: int = 15
+    watchdog_anomaly_threshold: float = 0.7  # confidence threshold (0.0-1.0)
+
     @field_validator(
         "prometheus_url",
         "loki_url",
