@@ -759,7 +759,7 @@ main {
   border-radius: 4px; padding: 8px 10px;
   font-family: var(--mono); font-size: 13px;
 }
-.hl-snap-log { display: grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: baseline; }
+.hl-snap-log { display: grid; grid-template-columns: 195px 1fr; gap: 10px; align-items: baseline; }
 .hl-snap-log .hl-snap-ts  { color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .hl-snap-log .hl-snap-msg { color: var(--text-dim); word-break: break-word; }
 .hl-snap-log.hl-sev-error    .hl-snap-msg,
