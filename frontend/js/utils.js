@@ -131,6 +131,72 @@ function escHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
+// Minimal markdown → HTML renderer for LLM chat replies (headers, lists,
+// bold/italic, inline + fenced code, links). Escapes first, then applies
+// formatting on the escaped string so the result is XSS-safe.
+function renderMarkdown(src) {
+  if (!src) return '';
+  let s = escHtml(String(src));
+
+  // Fenced code blocks ```lang\n...\n```
+  s = s.replace(/```([\w-]*)\n([\s\S]*?)```/g, (_, lang, code) =>
+    `<pre class="md-code"><code${lang ? ` data-lang="${lang}"` : ''}>${code.replace(/\n$/, '')}</code></pre>`
+  );
+
+  // Process line by line for headers and lists
+  const lines = s.split('\n');
+  const out = [];
+  let inUl = false, inOl = false;
+  const closeLists = () => {
+    if (inUl) { out.push('</ul>'); inUl = false; }
+    if (inOl) { out.push('</ol>'); inOl = false; }
+  };
+  for (const raw of lines) {
+    const line = raw;
+    let m;
+    if ((m = line.match(/^(#{1,6})\s+(.+)$/))) {
+      closeLists();
+      out.push(`<h${m[1].length} class="md-h">${m[2]}</h${m[1].length}>`);
+    } else if ((m = line.match(/^\s*[-*]\s+(.+)$/))) {
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      if (!inUl) { out.push('<ul class="md-ul">'); inUl = true; }
+      out.push(`<li>${m[1]}</li>`);
+    } else if ((m = line.match(/^\s*\d+\.\s+(.+)$/))) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (!inOl) { out.push('<ol class="md-ol">'); inOl = true; }
+      out.push(`<li>${m[1]}</li>`);
+    } else if (!line.trim()) {
+      closeLists();
+      out.push('');
+    } else {
+      closeLists();
+      out.push(line);
+    }
+  }
+  closeLists();
+  s = out.join('\n');
+
+  // Inline: bold, italic, inline code, links (skip inside <pre>).
+  s = s.replace(/(<pre[\s\S]*?<\/pre>)|(`([^`\n]+?)`)|(\*\*([^\*\n]+?)\*\*)|(\*([^\*\n]+?)\*)|(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))/g,
+    (m, pre, _ic, ic, _b, b, _i, i, _l, lt, lu) => {
+      if (pre) return pre;
+      if (ic !== undefined) return `<code class="md-ic">${ic}</code>`;
+      if (b  !== undefined) return `<strong>${b}</strong>`;
+      if (i  !== undefined) return `<em>${i}</em>`;
+      if (lt !== undefined) return `<a href="${lu}" target="_blank" rel="noopener">${lt}</a>`;
+      return m;
+    });
+
+  // Paragraph wrapping: turn runs of plain lines (not block-level) into <p>.
+  const blocks = s.split(/\n{2,}/);
+  return blocks.map(b => {
+    const t = b.trim();
+    if (!t) return '';
+    if (/^<(h\d|ul|ol|pre|li)/.test(t)) return t;
+    return `<p>${t.replace(/\n/g, '<br/>')}</p>`;
+  }).join('\n');
+}
+
 // ── Collapsible panel factory ────────────────────────────────────────────────
 // Returns a <div class="panel"> element with a clickable header that
 // toggles the .collapsed class to show / hide the body.
