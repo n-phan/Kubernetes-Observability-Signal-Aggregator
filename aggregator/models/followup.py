@@ -4,10 +4,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from aggregator.models.query import LlmConfig
 from aggregator.models.result import UnifiedResult
 
 FollowUpRole = Literal["user", "assistant"]
-FollowUpProvider = Literal["hermes", "anthropic"]
+FollowUpProvider = Literal["hermes", "anthropic", "openai"]
+FollowUpBackend = Literal["hermes", "llm"]
 
 
 class FollowUpMessage(BaseModel):
@@ -27,6 +29,11 @@ class FollowUpRequest(BaseModel):
     incident: UnifiedResult
     question: str = Field(min_length=1, max_length=2000)
     history: list[FollowUpMessage] = Field(default_factory=list, max_length=20)
+    rca_backend: FollowUpBackend | None = Field(
+        default=None,
+        description="RCA backend used for the incident: 'hermes' or 'llm'.",
+    )
+    llm: LlmConfig | None = None
 
     @field_validator("question")
     @classmethod

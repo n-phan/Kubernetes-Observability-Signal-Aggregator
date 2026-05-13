@@ -2,9 +2,8 @@
 //
 // Settings → "Config LLM": pick an LLM provider (ChatGPT / Gemini / Claude /
 // Ollama / Custom) and enter its endpoint, API key, and secret. Stored in
-// localStorage. NOTE: this is a configuration UI only — the RCA backend still
-// uses the server-side ANTHROPIC_API_KEY; wiring this config through to the
-// analyzer is a follow-up.
+// localStorage. Hermes remains the primary RCA agent when enabled; this config
+// is used by the simple/fallback LLM analyzer.
 //
 // Opened from the sidebar Setting item. Lazily builds its DOM on first toggle.
 
@@ -12,7 +11,7 @@ const LlmConfigPanel = {
   STORAGE_KEY: 'obs_llm_config',
 
   PRESETS: {
-    chatgpt: { label: 'ChatGPT (OpenAI)',   endpoint: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o',           note: 'API key required.' },
+    chatgpt: { label: 'ChatGPT (OpenAI)',   endpoint: 'https://api.openai.com/v1/responses',        model: 'gpt-5.5',       note: 'API key required. Uses the fallback/simple RCA path.' },
     gemini:  { label: 'Gemini (Google)',    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models', model: 'gemini-2.0-flash', note: 'API key required.' },
     claude:  { label: 'Claude (Anthropic)', endpoint: 'https://api.anthropic.com/v1/messages',       model: 'claude-sonnet-4-6', note: 'API key required.' },
     ollama:  { label: 'Ollama (local)',     endpoint: 'http://localhost:11434/api/chat',             model: 'llama3.1',         note: 'Local — no key needed.' },
@@ -36,8 +35,8 @@ const LlmConfigPanel = {
       <div class="llm-body">
         <div class="llm-note">
           Configure the LLM used for AI root-cause analysis. Stored locally in your browser
-          and sent with each "Analyze with AI" request.
-          <em>Only the Anthropic (Claude) provider is functional right now — the others are placeholders.</em>
+          and sent with RCA requests so Analyze with LLM and Hermes fallback can use it.
+          <em>OpenAI and Anthropic are functional for the simple/fallback RCA path.</em>
         </div>
         <div class="llm-form">
           <div class="field">
@@ -138,7 +137,7 @@ const LlmConfigPanel = {
     };
     try {
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(cfg));
-      this._flash('Saved ✓ — will be used on the next "Analyze with AI"');
+      this._flash('Saved ✓ — will be used on the next LLM RCA request');
     } catch (e) {
       this._flash('Could not save: ' + e.message, true);
     }

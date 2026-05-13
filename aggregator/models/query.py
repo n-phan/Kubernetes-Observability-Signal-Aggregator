@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -28,8 +29,8 @@ class TimeWindow(BaseModel):
     @classmethod
     def from_iso(cls, start: str, end: str) -> "TimeWindow":
         return cls(
-            start=datetime.fromisoformat(start),
-            end=datetime.fromisoformat(end),
+            start=_parse_iso_datetime(start, "start"),
+            end=_parse_iso_datetime(end, "end"),
         )
 
 
@@ -81,6 +82,12 @@ class QueryRequest(BaseModel):
     # RCA is opt-in — skipped by default to save API tokens
     include_rca: bool = False
 
+    # Optional per-request RCA backend. Omit to use server-side RCA_MODE.
+    rca_backend: Literal["hermes", "llm"] | None = Field(
+        default=None,
+        description="RCA backend override for this request: 'hermes' or 'llm'.",
+    )
+
     # Optional per-request LLM override (from the frontend Config LLM panel).
     # When omitted, RCA uses the server-side ANTHROPIC_API_KEY / default model.
     llm: LlmConfig | None = None
@@ -96,6 +103,12 @@ class QueryRequest(BaseModel):
         if has_range and not (self.start and self.end):
             raise ValueError("Both start and end must be provided together")
 
+        if self.start and self.end:
+            start = _parse_iso_datetime(self.start, "start")
+            end = _parse_iso_datetime(self.end, "end")
+            if start >= end:
+                raise ValueError("start must be before end")
+
         return self
 
     def resolve_window(self, default_lookback_minutes: int = 30) -> TimeWindow:
@@ -104,3 +117,13 @@ class QueryRequest(BaseModel):
             return TimeWindow.from_iso(self.start, self.end)
         lookback = self.lookback_minutes or default_lookback_minutes
         return TimeWindow.from_lookback(lookback)
+
+
+def _parse_iso_datetime(value: str, field_name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"Invalid {field_name} timestamp: {value}") from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
