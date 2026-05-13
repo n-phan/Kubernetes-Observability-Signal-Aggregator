@@ -59,16 +59,21 @@ const Sidebar = {
     document.getElementById('sb-head-service').addEventListener('click', () => this.toggleItem('service'));
     document.getElementById('sb-head-setting').addEventListener('click', () => this.toggleItem('setting'));
     document.getElementById('sb-collapse').addEventListener('click', () => this.toggleCollapsed());
+    // Sidebar nav items act like "go to page" rather than toggle: clicking the
+    // currently-open page is a no-op (don't close the right-hand view from
+    // under the user). Switching from one open panel to another still works
+    // because each panel's toggle() calls closeOtherPanels() on open.
     document.getElementById('sb-conn-config').addEventListener('click', () => {
-      if (window.ConnectionPanel) ConnectionPanel.toggle();
+      if (window.ConnectionPanel && !ConnectionPanel.isOpen()) ConnectionPanel.toggle();
     });
     document.getElementById('sb-llm-config').addEventListener('click', () => {
-      if (window.LlmConfigPanel) LlmConfigPanel.toggle();
+      if (window.LlmConfigPanel && !LlmConfigPanel.isOpen()) LlmConfigPanel.toggle();
     });
     document.getElementById('sb-watchdog-cta').addEventListener('click', () => {
-      if (window.WatchdogPanel) WatchdogPanel.toggle();
+      if (window.WatchdogPanel && !WatchdogPanel.isOpen()) WatchdogPanel.toggle();
     });
     document.getElementById('sb-head-history').addEventListener('click', () => {
+      if (window.HistoryListPanel && HistoryListPanel.isOpen()) return;
       const bar = document.getElementById('sidebar');
       if (bar && bar.classList.contains('collapsed')) this.toggleCollapsed();
       document.querySelectorAll('#sidebar .sb-item.open').forEach(el => el.classList.remove('open'));
@@ -199,7 +204,10 @@ const Sidebar = {
       btn.addEventListener('click', () => this.selectService(btn.dataset.svc))
     );
     const mgr = document.getElementById('sb-manage');
-    if (mgr) mgr.addEventListener('click', () => { if (window.ServicePanel) ServicePanel.toggle(); });
+    if (mgr) mgr.addEventListener('click', () => {
+      const sp = document.getElementById('sp-section');
+      if (window.ServicePanel && !(sp && sp.classList.contains('visible'))) ServicePanel.toggle();
+    });
   },
 
   // Select a service as the active query target and immediately run a query
