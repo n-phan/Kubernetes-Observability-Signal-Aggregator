@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import sqlite3
 from datetime import datetime, timezone
@@ -42,6 +43,13 @@ _MAX_PER_TARGET = 200            # keep at most this many rows per target
 _OCCURRENCES_IN_RESPONSE = 5     # recent prior occurrences embedded in a /query response
 _SAME_INCIDENT_WINDOW_SEC = 10 * 60   # re-queries within this gap fold into the same occurrence
 
+# Caps on the evidence we freeze into signals_snapshot. Bounded so the table
+# stays small even after hundreds of occurrences — Loki/Prom retention is the
+# source of truth within their windows; this is the after-retention fallback.
+_SNAPSHOT_LOG_LINES   = 30
+_SNAPSHOT_TRACES      = 15
+_SNAPSHOT_LOG_MSG_LEN = 500
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS query_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +66,7 @@ CREATE TABLE IF NOT EXISTS query_history (
   rca_summary TEXT,
   rca_root_cause TEXT,
   rca_confidence REAL,
+  signals_snapshot TEXT,
   signature TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_history_target_created ON query_history(target, created_at);
@@ -83,6 +92,8 @@ def _init_sync() -> None:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(query_history)")}
         if "last_seen" not in cols:
             conn.execute("ALTER TABLE query_history ADD COLUMN last_seen TEXT")
+        if "signals_snapshot" not in cols:
+            conn.execute("ALTER TABLE query_history ADD COLUMN signals_snapshot TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -143,6 +154,102 @@ def compute_signature(target: str, correlation_kinds: list[str]) -> str:
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
+# ── Evidence snapshot ──────────────────────────────────────────────────────
+
+
+def _build_signals_snapshot(result: UnifiedResult) -> str | None:
+    """Freeze a bounded slice of the raw evidence into JSON.
+
+    Stored alongside the summary so that *after* Loki/Prom/Jaeger have aged the
+    original data out of their retention windows, we can still show what
+    actually happened at the time of the incident — and re-run RCA against it.
+
+    Deliberately not the full result: we keep top error logs, top error traces
+    (with span counts but not every span), and metric latest/peak only (no full
+    time-series — that would dominate the row size). Sized for ~50–200 KB.
+    """
+    from aggregator.models.signals import Severity
+
+    log_lines = [
+        ll for ll in (result.logs.lines or [])
+        if ll.severity in (Severity.ERROR, Severity.CRITICAL)
+    ] or list(result.logs.lines or [])
+    log_lines = log_lines[:_SNAPSHOT_LOG_LINES]
+
+    snap_logs = [
+        {
+            "ts": ll.timestamp.isoformat() if ll.timestamp else None,
+            "severity": str(ll.severity),
+            "message": (ll.message or "")[:_SNAPSHOT_LOG_MSG_LEN],
+        }
+        for ll in log_lines
+    ]
+
+    traces = list(result.traces.traces or [])
+    # Surface error traces first, then by duration so the slowest are kept.
+    traces.sort(key=lambda t: (not t.has_errors, -(t.duration_ms or 0)))
+    snap_traces = []
+    for t in traces[:_SNAPSHOT_TRACES]:
+        root = t.root_span
+        err_span = next((s for s in t.spans if s.is_error), None)
+        snap_traces.append({
+            "trace_id": t.trace_id,
+            "root_service": t.root_service,
+            "operation": root.operation_name if root else None,
+            "duration_ms": round(t.duration_ms or 0, 2),
+            "span_count": len(t.spans),
+            "is_error": t.has_errors,
+            "error_message": (err_span.tags.get("error") or err_span.tags.get("otel.status_description")) if err_span else None,
+        })
+
+    snap_metrics = [
+        {
+            "name": s.name,
+            "labels": s.labels,
+            "latest": s.latest_value,
+            "peak": s.peak_value,
+            "sample_count": len(s.samples or []),
+        }
+        for s in (result.metrics.series or [])
+    ]
+
+    snap_corrs = [
+        {
+            "kind": c.kind,
+            "severity": c.severity,
+            "description": c.description,
+            "timestamp": c.timestamp.isoformat() if c.timestamp else None,
+            "confidence": c.confidence,
+            "related_metric": c.related_metric,
+            "related_log_sample": c.related_log_sample,
+            "related_trace_id": c.related_trace_id,
+        }
+        for c in (result.correlations or [])
+    ]
+
+    payload = {
+        "window": {
+            "start": result.meta.window_start.isoformat() if result.meta.window_start else None,
+            "end":   result.meta.window_end.isoformat()   if result.meta.window_end   else None,
+        },
+        "totals": {
+            "log_lines": result.logs.total_lines,
+            "error_count": result.logs.error_count,
+            "warn_count":  result.logs.warn_count,
+            "trace_count": len(result.traces.traces or []),
+            "error_trace_count": result.traces.error_trace_count,
+        },
+        "logs":         snap_logs,
+        "traces":       snap_traces,
+        "metrics":      snap_metrics,
+        "correlations": snap_corrs,
+    }
+    try:
+        return json.dumps(payload, default=str, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+
+
 # ── Record + recurrence lookup ─────────────────────────────────────────────
 
 def _record_sync(row: dict) -> RecurrenceInfo:
@@ -198,13 +305,14 @@ def _record_sync(row: dict) -> RecurrenceInfo:
                 " rca_performed=MAX(rca_performed, ?), "
                 " rca_summary=COALESCE(?, rca_summary), "
                 " rca_root_cause=COALESCE(?, rca_root_cause), "
-                " rca_confidence=COALESCE(?, rca_confidence) "
+                " rca_confidence=COALESCE(?, rca_confidence), "
+                " signals_snapshot=COALESCE(?, signals_snapshot) "
                 "WHERE id=?",
                 (
                     row["created_at"], row["window_start"], row["window_end"],
                     row["error_count"], row["error_trace_count"], row["correlation_kinds"],
                     row["rca_performed"], row["rca_summary"], row["rca_root_cause"],
-                    row["rca_confidence"], merge_id,
+                    row["rca_confidence"], row["signals_snapshot"], merge_id,
                 ),
             )
         else:
@@ -212,13 +320,14 @@ def _record_sync(row: dict) -> RecurrenceInfo:
                 "INSERT INTO query_history "
                 "(created_at, last_seen, target, namespace, window_start, window_end, error_count, "
                 " error_trace_count, correlation_kinds, rca_performed, rca_summary, "
-                " rca_root_cause, rca_confidence, signature) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " rca_root_cause, rca_confidence, signals_snapshot, signature) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     row["created_at"], row["created_at"], row["target"], row["namespace"],
                     row["window_start"], row["window_end"], row["error_count"],
                     row["error_trace_count"], row["correlation_kinds"], row["rca_performed"],
-                    row["rca_summary"], row["rca_root_cause"], row["rca_confidence"], row["signature"],
+                    row["rca_summary"], row["rca_root_cause"], row["rca_confidence"],
+                    row["signals_snapshot"], row["signature"],
                 ),
             )
             conn.execute(
@@ -237,6 +346,7 @@ async def record(result: UnifiedResult) -> HistoryInfo | None:
     correlation_kinds = [c.kind for c in result.correlations]
     rca = result.rca
     sig = compute_signature(result.meta.target, correlation_kinds)
+    snapshot = _build_signals_snapshot(result)
     row = {
         "created_at": datetime.now(tz=timezone.utc).isoformat(),
         "target": result.meta.target,
@@ -250,6 +360,7 @@ async def record(result: UnifiedResult) -> HistoryInfo | None:
         "rca_summary": rca.summary if rca.performed else None,
         "rca_root_cause": rca.root_cause if rca.performed else None,
         "rca_confidence": rca.confidence if rca.performed else None,
+        "signals_snapshot": snapshot,
         "signature": sig,
     }
     try:

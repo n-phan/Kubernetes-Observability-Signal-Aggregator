@@ -326,6 +326,39 @@ const HistoryListPanel = {
         + row('Confidence', conf || '—')
       : row('RCA', 'not run for this occurrence', { muted: true });
 
+    // Frozen evidence — survives Loki/Prom/Jaeger retention windows. NULL on
+    // rows recorded before this column was added.
+    let snap = null;
+    if (r.signals_snapshot) {
+      try { snap = JSON.parse(r.signals_snapshot); } catch (_) { snap = null; }
+    }
+    const snapshotRows = !snap ? row('Frozen evidence', 'not captured for this occurrence', { muted: true }) : (() => {
+      const logsHtml = (snap.logs || []).map(l =>
+        `<div class="hl-snap-log hl-sev-${escHtml(String(l.severity || '').toLowerCase())}">
+           <span class="hl-snap-ts">${escHtml(fmtDateTime(l.ts))}</span>
+           <span class="hl-snap-msg">${escHtml(l.message || '')}</span>
+         </div>`).join('') || '<span class="hl-muted">none captured</span>';
+      const tracesHtml = (snap.traces || []).map(t =>
+        `<div class="hl-snap-trace${t.is_error ? ' hl-snap-trace-err' : ''}">
+           <span class="hl-snap-trace-id">${escHtml(t.trace_id || '')}</span>
+           <span class="hl-snap-trace-op">${escHtml(t.operation || '—')}</span>
+           <span class="hl-snap-trace-dur">${escHtml((t.duration_ms ?? 0) + ' ms')}</span>
+           <span class="hl-snap-trace-svc">${escHtml(t.root_service || '—')}</span>
+           ${t.error_message ? `<div class="hl-snap-trace-err-msg">${escHtml(t.error_message)}</div>` : ''}
+         </div>`).join('') || '<span class="hl-muted">none captured</span>';
+      const metricsHtml = (snap.metrics || []).map(m =>
+        `<div class="hl-snap-metric">
+           <span class="hl-snap-metric-name">${escHtml(m.name || '')}</span>
+           <span class="hl-snap-metric-vals">latest=${escHtml(String(m.latest ?? '—'))} · peak=${escHtml(String(m.peak ?? '—'))}</span>
+         </div>`).join('') || '<span class="hl-muted">none captured</span>';
+      const totals = snap.totals || {};
+      const totalsLine = `${totals.log_lines ?? 0} log lines (${totals.error_count ?? 0} error, ${totals.warn_count ?? 0} warn) · ${totals.trace_count ?? 0} traces (${totals.error_trace_count ?? 0} error)`;
+      return row('Frozen evidence', `<div class="hl-muted hl-snap-totals">${escHtml(totalsLine)}</div>`, { block: true, html: true })
+        + row('Logs (top errors)',  `<div class="hl-snap-logs">${logsHtml}</div>`,        { block: true, html: true })
+        + row('Traces',             `<div class="hl-snap-traces">${tracesHtml}</div>`,    { block: true, html: true })
+        + row('Metrics',            `<div class="hl-snap-metrics">${metricsHtml}</div>`,  { block: true, html: true });
+    })();
+
     const ov = document.createElement('div');
     ov.className = 'hl-overlay';
     ov.innerHTML = `
@@ -343,6 +376,7 @@ const HistoryListPanel = {
           ${row('Errors / error traces', `${r.error_count ?? 0} / ${r.error_trace_count ?? 0}`)}
           ${row('Correlations', chips, { html: true })}
           ${rcaRows}
+          ${snapshotRows}
           ${row('Signature', r.signature || '?', { mono: true, muted: true })}
         </div>
       </div>`;

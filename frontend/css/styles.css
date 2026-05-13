@@ -683,6 +683,34 @@ main {
 .hl-d-val { color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .hl-d-mono { font-family: var(--mono); font-size: 11px; }
 
+/* Frozen evidence rendered in the occurrence detail modal */
+.hl-snap-totals { font-size: 11px; }
+.hl-snap-logs, .hl-snap-traces, .hl-snap-metrics {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 240px; overflow-y: auto;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: 4px; padding: 8px 10px;
+  font-family: var(--mono); font-size: 11px;
+}
+.hl-snap-log { display: grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: baseline; }
+.hl-snap-log .hl-snap-ts  { color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hl-snap-log .hl-snap-msg { color: var(--text-dim); word-break: break-word; }
+.hl-snap-log.hl-sev-error    .hl-snap-msg,
+.hl-snap-log.hl-sev-critical .hl-snap-msg { color: var(--error); }
+.hl-snap-log.hl-sev-warn     .hl-snap-msg { color: var(--warn); }
+
+.hl-snap-trace { display: grid; grid-template-columns: 130px 1fr 80px 100px; gap: 8px; align-items: baseline; padding: 2px 0; }
+.hl-snap-trace-id  { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hl-snap-trace-op  { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hl-snap-trace-dur { color: var(--cyan); text-align: right; font-variant-numeric: tabular-nums; }
+.hl-snap-trace-svc { color: var(--text-dim); white-space: nowrap; }
+.hl-snap-trace-err .hl-snap-trace-op { color: var(--error); }
+.hl-snap-trace-err-msg { grid-column: 1 / -1; color: var(--error); font-size: 10px; padding-left: 4px; word-break: break-word; }
+
+.hl-snap-metric { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 2px 0; }
+.hl-snap-metric-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.hl-snap-metric-vals { color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
 /* ── Connection panel (Settings → API Endpoint & Namespace) ── */
 #connection-section { display: none; background: var(--bg); }
 #connection-section.visible { display: block; }
