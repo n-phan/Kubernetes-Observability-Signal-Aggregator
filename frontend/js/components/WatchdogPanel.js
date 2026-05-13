@@ -11,34 +11,40 @@ const WatchdogPanel = {
         <button class="conn-close" onclick="WatchdogPanel.toggle()" title="Close">✕</button>
       </div>
       <div class="conn-body">
-        <div class="conn-note">Run continuous anomaly scans across registered services and send email alerts when SMTP is configured.</div>
-        <div class="conn-form">
-          <div class="field">
-            <label for="wd-enabled">Enabled</label>
-            <select id="wd-enabled">
-              <option value="true">On</option>
-              <option value="false">Off</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="wd-interval">Interval (sec)</label>
-            <input id="wd-interval" type="number" min="15" value="60" />
-          </div>
-          <div class="field">
-            <label for="wd-lookback">Lookback (min)</label>
-            <input id="wd-lookback" type="number" min="1" value="15" />
-          </div>
-          <div class="field">
-            <label for="wd-threshold">Threshold (0-1)</label>
-            <input id="wd-threshold" type="number" step="0.05" min="0" max="1" value="0.7" />
+        <div class="wd-notify-section wd-notify-section--top">
+          <div class="wd-notify-title">Scanner</div>
+          <div class="wd-notify-note">Run continuous anomaly scans across registered services and send email alerts when SMTP is configured.</div>
+
+          <div class="wd-notify-block">
+            <div class="wd-notify-fields">
+              <div class="field wd-field-toggle">
+                <label for="wd-enabled">Enabled</label>
+                <label class="wd-toggle">
+                  <input id="wd-enabled" type="checkbox" />
+                  <span class="wd-toggle-slider"></span>
+                </label>
+              </div>
+              <div class="field">
+                <label for="wd-interval">Interval (sec)</label>
+                <input id="wd-interval" type="number" min="15" value="60" />
+              </div>
+              <div class="field">
+                <label for="wd-lookback">Lookback (min)</label>
+                <input id="wd-lookback" type="number" min="1" value="15" />
+              </div>
+              <div class="field">
+                <label for="wd-threshold">Threshold (0-1)</label>
+                <input id="wd-threshold" type="number" step="0.05" min="0" max="1" value="0.7" />
+              </div>
+            </div>
+            <div class="conn-actions">
+              <button class="btn-query" id="wd-apply">Apply</button>
+              <button class="btn-mock" id="wd-clear">Clear alerts</button>
+              <span class="conn-msg" id="wd-msg"></span>
+            </div>
+            <div id="wd-status" class="wd-status-pill">—</div>
           </div>
         </div>
-        <div class="conn-actions">
-          <button class="btn-query" id="wd-apply">Apply</button>
-          <button class="btn-mock" id="wd-clear">Clear alerts</button>
-          <span class="conn-msg" id="wd-msg"></span>
-        </div>
-        <div id="wd-status" class="env-current" style="margin-top:8px">—</div>
 
         <div class="wd-notify-section">
           <div class="wd-notify-title">Notifications</div>
@@ -93,6 +99,9 @@ const WatchdogPanel = {
       $(id).addEventListener('input',  () => this._updateApplyDirty());
       $(id).addEventListener('change', () => this._updateApplyDirty());
     });
+    // Enabled toggle auto-applies — flipping the switch is a one-bit change,
+    // no point asking the user to also click Apply.
+    $('wd-enabled').addEventListener('change', () => this.apply());
     $('wd-notify-save').addEventListener('click', () => this.saveNotifications());
     $('wd-notify-test').addEventListener('click', () => this.testNotifications());
     // Enable/disable toggles auto-apply — flipping them is a single boolean
@@ -127,7 +136,7 @@ const WatchdogPanel = {
       const statusResp = await fetch(`${endpoint}/api/watchdog`);
       if (!statusResp.ok) throw new Error(`HTTP ${statusResp.status}`);
       const status = await statusResp.json();
-      $('wd-enabled').value = status.enabled ? 'true' : 'false';
+      $('wd-enabled').checked = !!status.enabled;
       $('wd-interval').value = status.interval_seconds ?? 60;
       $('wd-lookback').value = status.lookback_minutes ?? 15;
       $('wd-threshold').value = status.anomaly_threshold ?? 0.7;
@@ -169,7 +178,7 @@ const WatchdogPanel = {
   async apply() {
     const endpoint = ($('inp-endpoint')?.value || 'http://localhost:8080').replace(/\/$/, '');
     const payload = {
-      enabled: $('wd-enabled').value === 'true',
+      enabled: $('wd-enabled').checked,
       interval_seconds: parseInt($('wd-interval').value, 10) || 60,
       lookback_minutes: parseInt($('wd-lookback').value, 10) || 15,
       anomaly_threshold: parseFloat($('wd-threshold').value) || 0.7,
@@ -200,7 +209,7 @@ const WatchdogPanel = {
 
   _watchdogSnapshot() {
     return JSON.stringify({
-      enabled:  $('wd-enabled').value,
+      enabled:  $('wd-enabled').checked,
       interval: $('wd-interval').value,
       lookback: $('wd-lookback').value,
       threshold: $('wd-threshold').value,
