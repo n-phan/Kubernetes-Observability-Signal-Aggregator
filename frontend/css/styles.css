@@ -419,18 +419,25 @@ header {
   justify-content: center;
   align-self: flex-end;
   margin-bottom: 6px;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   background: none;
   border: 1px solid var(--border-lit);
-  border-radius: 4px;
+  border-radius: 999px;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 14px;
   line-height: 1;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.15s;
 }
-.btn-theme:hover { color: var(--accent); border-color: var(--accent); }
+.btn-theme:hover  { color: var(--accent); border-color: var(--accent); background: rgb(var(--accent-rgb) / 0.08); }
+.btn-theme:active { transform: scale(0.92); }
+
+.theme-icon { display: block; }
+/* Dark mode shows the sun (click → switch to light); light mode shows the moon. */
+.theme-icon-moon { display: none; }
+body.light .theme-icon-sun  { display: none; }
+body.light .theme-icon-moon { display: block; }
 
 /* ── Light mode overrides — 1Panel-style blue ── */
 body.light {
