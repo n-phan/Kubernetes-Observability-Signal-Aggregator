@@ -14,20 +14,34 @@ function fmt(v) {
   return String(v);
 }
 
-// ── ISO timestamp → "HH:MM:SS UTC" ──────────────────────────────────────────
-function fmtTime(iso) {
-  if (!iso) return '—';
-  try { return new Date(iso).toISOString().slice(11, 19) + ' UTC'; }
-  catch { return iso; }
+// ── Timezone helpers ─────────────────────────────────────────────────────────
+// Timestamps from the API are UTC (ISO with a +00:00 offset); we render them in
+// the browser's local zone. `_tzLabel` produces a compact, locale-independent
+// suffix like "UTC+8" / "UTC-5" / "UTC+5:30" so the displayed time is unambiguous.
+const _pad2 = n => String(n).padStart(2, '0');
+function _tzLabel(d) {
+  const off = -d.getTimezoneOffset();              // minutes east of UTC
+  const sign = off >= 0 ? '+' : '-';
+  const h = Math.floor(Math.abs(off) / 60);
+  const m = Math.abs(off) % 60;
+  return `UTC${sign}${h}${m ? ':' + _pad2(m) : ''}`;
 }
 
-// ── ISO timestamp → "YYYY-MM-DD HH:MM UTC" ──────────────────────────────────
+// ── ISO timestamp → local "HH:MM:SS UTC±N" ──────────────────────────────────
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return `${_pad2(d.getHours())}:${_pad2(d.getMinutes())}:${_pad2(d.getSeconds())} ${_tzLabel(d)}`;
+}
+
+// ── ISO timestamp → local "YYYY-MM-DD HH:MM UTC±N" ──────────────────────────
 function fmtDateTime(iso) {
   if (!iso) return '—';
-  try {
-    const s = new Date(iso).toISOString();   // 2026-05-08T14:22:13.000Z
-    return s.slice(0, 10) + ' ' + s.slice(11, 16) + ' UTC';
-  } catch { return String(iso); }
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return `${d.getFullYear()}-${_pad2(d.getMonth() + 1)}-${_pad2(d.getDate())} `
+       + `${_pad2(d.getHours())}:${_pad2(d.getMinutes())} ${_tzLabel(d)}`;
 }
 
 // ── Log severity classifier ──────────────────────────────────────────────────
@@ -115,6 +129,72 @@ function escHtml(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+// Minimal markdown → HTML renderer for LLM chat replies (headers, lists,
+// bold/italic, inline + fenced code, links). Escapes first, then applies
+// formatting on the escaped string so the result is XSS-safe.
+function renderMarkdown(src) {
+  if (!src) return '';
+  let s = escHtml(String(src));
+
+  // Fenced code blocks ```lang\n...\n```
+  s = s.replace(/```([\w-]*)\n([\s\S]*?)```/g, (_, lang, code) =>
+    `<pre class="md-code"><code${lang ? ` data-lang="${lang}"` : ''}>${code.replace(/\n$/, '')}</code></pre>`
+  );
+
+  // Process line by line for headers and lists
+  const lines = s.split('\n');
+  const out = [];
+  let inUl = false, inOl = false;
+  const closeLists = () => {
+    if (inUl) { out.push('</ul>'); inUl = false; }
+    if (inOl) { out.push('</ol>'); inOl = false; }
+  };
+  for (const raw of lines) {
+    const line = raw;
+    let m;
+    if ((m = line.match(/^(#{1,6})\s+(.+)$/))) {
+      closeLists();
+      out.push(`<h${m[1].length} class="md-h">${m[2]}</h${m[1].length}>`);
+    } else if ((m = line.match(/^\s*[-*]\s+(.+)$/))) {
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      if (!inUl) { out.push('<ul class="md-ul">'); inUl = true; }
+      out.push(`<li>${m[1]}</li>`);
+    } else if ((m = line.match(/^\s*\d+\.\s+(.+)$/))) {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (!inOl) { out.push('<ol class="md-ol">'); inOl = true; }
+      out.push(`<li>${m[1]}</li>`);
+    } else if (!line.trim()) {
+      closeLists();
+      out.push('');
+    } else {
+      closeLists();
+      out.push(line);
+    }
+  }
+  closeLists();
+  s = out.join('\n');
+
+  // Inline: bold, italic, inline code, links (skip inside <pre>).
+  s = s.replace(/(<pre[\s\S]*?<\/pre>)|(`([^`\n]+?)`)|(\*\*([^\*\n]+?)\*\*)|(\*([^\*\n]+?)\*)|(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))/g,
+    (m, pre, _ic, ic, _b, b, _i, i, _l, lt, lu) => {
+      if (pre) return pre;
+      if (ic !== undefined) return `<code class="md-ic">${ic}</code>`;
+      if (b  !== undefined) return `<strong>${b}</strong>`;
+      if (i  !== undefined) return `<em>${i}</em>`;
+      if (lt !== undefined) return `<a href="${lu}" target="_blank" rel="noopener">${lt}</a>`;
+      return m;
+    });
+
+  // Paragraph wrapping: turn runs of plain lines (not block-level) into <p>.
+  const blocks = s.split(/\n{2,}/);
+  return blocks.map(b => {
+    const t = b.trim();
+    if (!t) return '';
+    if (/^<(h\d|ul|ol|pre|li)/.test(t)) return t;
+    return `<p>${t.replace(/\n/g, '<br/>')}</p>`;
+  }).join('\n');
 }
 
 // ── Collapsible panel factory ────────────────────────────────────────────────

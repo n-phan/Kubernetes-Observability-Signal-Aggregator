@@ -737,10 +737,15 @@ class RcaPanel {
       const source = role === 'assistant' && item.provider
         ? `<div class="rca-followup-source">${escHtml(item.provider)}${item.fallback_used ? ' fallback' : ''}</div>`
         : '';
+      // User input stays plain text (no markdown injection); assistant replies
+      // are rendered as markdown so headings/bullets/code/bold display properly.
+      const body = role === 'assistant'
+        ? `<div class="rca-followup-text md-body">${renderMarkdown(item.content || '')}</div>`
+        : `<div class="rca-followup-text">${escHtml(item.content || '')}</div>`;
       return `
         <div class="rca-followup-message ${role}">
           <div class="rca-followup-role">${role === 'user' ? 'You' : 'Assistant'}</div>
-          <div class="rca-followup-text">${escHtml(item.content || '')}</div>
+          ${body}
           ${source}
         </div>
       `;

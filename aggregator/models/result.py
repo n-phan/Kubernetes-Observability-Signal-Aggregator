@@ -52,6 +52,7 @@ class HistoryOccurrence(BaseModel):
 
     created_at: datetime
     rca_summary: str | None = None
+    rca_root_cause: str | None = None
     rca_confidence: float | None = None
 
 
@@ -62,6 +63,11 @@ class RecurrenceInfo(BaseModel):
     first_seen: datetime | None = None
     last_seen: datetime | None = None
     occurrences: list[HistoryOccurrence] = Field(default_factory=list)  # most recent first, capped
+    # True when this query folded into an existing occurrence row (within the
+    # same-incident window). Lets the UI distinguish "no prior history at all"
+    # from "still the same incident as a few minutes ago" — both have count=0.
+    ongoing: bool = False
+    current_started_at: datetime | None = None  # created_at of the merged-into row, if any
 
 
 class HistoryInfo(BaseModel):

@@ -138,15 +138,34 @@ async function runQuery() {
     renderResult(data, false);
 
   } catch (err) {
+    console.error('[runQuery] failed:', err);
     setStatus('error');
     $('main').innerHTML = `
       <div class="error-msg-box animate-in">
         <strong>Query failed</strong><br/>${escHtml(err.message)}
+        <pre style="margin-top:8px;font-size:11px;opacity:0.7;white-space:pre-wrap">${escHtml(err.stack || '')}</pre>
       </div>
     `;
   } finally {
     setBusy(false);
   }
+}
+
+// Returns true if the user's saved LLM config is usable for an LLM-backed RCA
+// call. Local providers (Ollama) don't need an API key; everything else does.
+// On failure, shows a confirm() offering to jump to the Config LLM panel.
+function _ensureLlmConfigured() {
+  const cfg = (window.LlmConfigPanel && LlmConfigPanel.getConfig) ? LlmConfigPanel.getConfig() : null;
+  const provider = cfg?.provider || '';
+  const keylessProviders = new Set(['ollama']);
+  if (cfg && (keylessProviders.has(provider) || (cfg.key && cfg.key.trim()))) return true;
+  const msg = !cfg
+    ? 'No LLM configuration found.\n\nOpen the Config LLM panel to set provider, endpoint, model, and API key?'
+    : `API key is missing for provider "${provider || 'unknown'}".\n\nOpen the Config LLM panel to set it?`;
+  if (window.confirm(msg) && window.LlmConfigPanel && !LlmConfigPanel.isOpen()) {
+    LlmConfigPanel.toggle();
+  }
+  return false;
 }
 
 // ── Analyze with Hermes or LLM (RCA) ──────────────────────────────────────────
@@ -160,6 +179,7 @@ async function runAnalyze(rcaBackend) {
   }
   const backend = rcaBackend === 'llm' ? 'llm' : 'hermes';
   const backendLabel = backend === 'llm' ? 'LLM' : 'Hermes';
+  if (backend === 'llm' && !_ensureLlmConfigured()) return;
   const { target, namespace, lookback, endpoint, start, end } = _lastQuery;
   const demoRange =
     _pendingDemoWindow?.target === target
@@ -248,6 +268,8 @@ async function runRcaFollowup(questionOverride) {
     alert('Run RCA first so the assistant has an incident to discuss.');
     return;
   }
+  // Follow-ups always go through the LLM path; require a configured key.
+  if (_lastRcaBackend !== 'hermes' && !_ensureLlmConfigured()) return;
 
   const endpoint = _lastQuery.endpoint;
   const llmCfg = (window.LlmConfigPanel && LlmConfigPanel.getConfig) ? LlmConfigPanel.getConfig() : null;
