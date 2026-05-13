@@ -18,6 +18,7 @@ from aggregator.demo import router as demo_router
 from aggregator.models.followup import FollowUpRequest, FollowUpResponse
 from aggregator.models.query import QueryRequest
 from aggregator.models.result import UnifiedResult
+from aggregator.watchdog import AutoWatchdog
 
 _INFRA_SERVICES: frozenset[str] = frozenset(
     {"prometheus", "loki", "jaeger", "promtail", "aggregator", "node", "node-exporter"}
@@ -32,15 +33,25 @@ logging.basicConfig(level=settings.log_level.upper())
 logger = logging.getLogger(__name__)
 
 _aggregator: SignalAggregator | None = None
+_watchdog: AutoWatchdog | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _aggregator
+    global _aggregator, _watchdog
     await history.init_db()
     _aggregator = SignalAggregator()
+    _watchdog = AutoWatchdog(aggregator_getter=lambda: _aggregator)
+    if settings.watchdog_enabled:
+        await _watchdog.start(
+            interval_seconds=settings.watchdog_interval_seconds,
+            lookback_minutes=settings.watchdog_lookback_minutes,
+            anomaly_threshold=settings.watchdog_anomaly_threshold,
+        )
     logger.info("Signal aggregator started")
     yield
+    if _watchdog:
+        await _watchdog.stop()
     if _aggregator:
         await _aggregator.close()
     logger.info("Signal aggregator shut down")
@@ -114,6 +125,17 @@ class UpdateServiceGithubRequest(BaseModel):
     github_repo: str | None = None
     github_branch: str | None = None
     github_path_prefix: str | None = None
+
+
+class EnvironmentRequest(BaseModel):
+    name: str  # local | staging | production
+
+
+class WatchdogRequest(BaseModel):
+    enabled: bool
+    interval_seconds: int = 60
+    lookback_minutes: int = 15
+    anomaly_threshold: float = 0.7
 
 
 # ── Service registration endpoints ────────────────────────────────────────────
@@ -346,3 +368,103 @@ async def config_view() -> dict[str, object]:
         "max_log_lines": settings.max_log_lines,
         "max_traces": settings.max_traces,
     }
+
+
+def _env_urls(name: str) -> dict[str, str]:
+    env = name.lower()
+    mapping = {
+        "local": {
+            "prometheus_url": settings.local_prometheus_url,
+            "loki_url": settings.local_loki_url,
+            "jaeger_url": settings.local_jaeger_url,
+        },
+        "staging": {
+            "prometheus_url": settings.staging_prometheus_url,
+            "loki_url": settings.staging_loki_url,
+            "jaeger_url": settings.staging_jaeger_url,
+        },
+        "production": {
+            "prometheus_url": settings.production_prometheus_url,
+            "loki_url": settings.production_loki_url,
+            "jaeger_url": settings.production_jaeger_url,
+        },
+    }
+    if env not in mapping:
+        raise HTTPException(status_code=400, detail="Environment must be local, staging, or production")
+    urls = mapping[env]
+    missing = [k for k, v in urls.items() if not v]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing URLs for {env}: {', '.join(missing)}",
+        )
+    return {k: v.rstrip("/") for k, v in urls.items()}
+
+
+@app.get("/api/environment")
+async def get_environment() -> dict[str, object]:
+    return {
+        "current": settings.environment_name,
+        "current_urls": {
+            "prometheus_url": settings.prometheus_url,
+            "loki_url": settings.loki_url,
+            "jaeger_url": settings.jaeger_url,
+        },
+        "available": ["local", "staging", "production"],
+    }
+
+
+@app.post("/api/environment")
+async def set_environment(request: EnvironmentRequest) -> dict[str, object]:
+    global _aggregator
+    urls = _env_urls(request.name)
+
+    settings.environment_name = request.name.lower()
+    settings.prometheus_url = urls["prometheus_url"]
+    settings.loki_url = urls["loki_url"]
+    settings.jaeger_url = urls["jaeger_url"]
+
+    if _aggregator:
+        await _aggregator.close()
+    _aggregator = SignalAggregator()
+
+    return {
+        "ok": True,
+        "environment": settings.environment_name,
+        "urls": urls,
+    }
+
+
+@app.get("/api/watchdog")
+async def watchdog_status() -> dict[str, object]:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    return _watchdog.status()
+
+
+@app.post("/api/watchdog")
+async def watchdog_toggle(request: WatchdogRequest) -> dict[str, object]:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    if request.enabled:
+        return await _watchdog.start(
+            interval_seconds=request.interval_seconds,
+            lookback_minutes=request.lookback_minutes,
+            anomaly_threshold=request.anomaly_threshold,
+        )
+    return await _watchdog.stop()
+
+
+@app.get("/api/watchdog/alerts")
+async def watchdog_alerts() -> dict[str, object]:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    return {"alerts": _watchdog.get_alerts()}
+
+
+@app.delete("/api/watchdog/alerts")
+async def clear_watchdog_alerts() -> dict[str, object]:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    _watchdog.clear_alerts()
+    return {"ok": True}

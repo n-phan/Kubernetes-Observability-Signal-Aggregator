@@ -310,11 +310,13 @@ function renderResult(data, showRca = true) {
   const metricsPanel = MetricsPanel.create(data.metrics);
   const logsPanel    = LogsPanel.create(data.logs);
   const tracesPanel  = TracesPanel.create(data.traces);
+  const timelinePanel = TimelinePanel.create(data.timeline || []);
 
   const panels = [
     new MetaBar(data),
     HistoryPanel.create(data.history),
     rcaPanel,
+    timelinePanel,
     CorrelationsPanel.create(data.correlations),
     metricsPanel,
     logsPanel,

@@ -24,6 +24,17 @@ class CorrelationEvent(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
+class TimelineEvent(BaseModel):
+    """A single incident timeline entry for causal ordering in the UI."""
+
+    timestamp: datetime
+    source: str  # metric | log | trace | correlation
+    severity: str = "info"
+    title: str
+    detail: str | None = None
+    offset_seconds: float = 0.0
+
+
 class QueryMeta(BaseModel):
     """Metadata attached to every query result — identity, time window, and timing."""
 
@@ -71,6 +82,7 @@ class UnifiedResult(BaseModel):
     logs: LogsSignal
     traces: TracesSignal
     correlations: list[CorrelationEvent] = Field(default_factory=list)
+    timeline: list[TimelineEvent] = Field(default_factory=list)
     rca: RCAResult = Field(default_factory=RCAResult)
     history: HistoryInfo | None = None  # populated only for notable queries
 

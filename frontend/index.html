@@ -79,6 +79,7 @@
     <script src="js/components/MetaBar.js"></script>
     <script src="js/components/RcaPanel.js"></script>
     <script src="js/components/CorrelationsPanel.js"></script>
+    <script src="js/components/TimelinePanel.js"></script>
     <script src="js/components/MetricsPanel.js"></script>
     <script src="js/components/LogsPanel.js"></script>
     <script src="js/components/TracesPanel.js"></script>
@@ -87,6 +88,8 @@
     <script src="js/components/ClusterStatusPanel.js"></script>
     <script src="js/components/LlmConfigPanel.js"></script>
     <script src="js/components/ConnectionPanel.js"></script>
+    <script src="js/components/EnvironmentPanel.js"></script>
+    <script src="js/components/WatchdogPanel.js"></script>
     <script src="js/components/HistoryPanel.js"></script>
     <script src="js/components/Sidebar.js"></script>
 
@@ -98,6 +101,8 @@
       // ConnectionPanel.init() goes first — it creates #inp-endpoint / #inp-namespace,
       // which the other panels read on startup.
       ConnectionPanel.init();
+      EnvironmentPanel.init();
+      WatchdogPanel.init();
       Sidebar.init();
       DemoPanel.init();
       ServicePanel.init();

@@ -45,7 +45,9 @@ const Sidebar = {
           </button>
           <div class="sb-sub" id="sb-sub-setting">
             <button class="sb-svc" id="sb-conn-config">API Endpoint &amp; Namespace</button>
+            <button class="sb-svc" id="sb-env-config">Environment</button>
             <button class="sb-svc" id="sb-llm-config">Config LLM</button>
+            <button class="sb-svc" id="sb-watchdog">Watchdog</button>
           </div>
         </div>
       </nav>
@@ -58,6 +60,12 @@ const Sidebar = {
     });
     document.getElementById('sb-llm-config').addEventListener('click', () => {
       if (window.LlmConfigPanel) LlmConfigPanel.toggle();
+    });
+    document.getElementById('sb-env-config').addEventListener('click', () => {
+      if (window.EnvironmentPanel) EnvironmentPanel.toggle();
+    });
+    document.getElementById('sb-watchdog').addEventListener('click', () => {
+      if (window.WatchdogPanel) WatchdogPanel.toggle();
     });
     document.getElementById('sb-head-history').addEventListener('click', () => {
       const bar = document.getElementById('sidebar');
@@ -90,7 +98,9 @@ const Sidebar = {
     { name: 'service',    isOpen: () => { const s = document.getElementById('sp-section'); return !!(s && s.classList.contains('visible')); }, close: () => window.ServicePanel    && ServicePanel.toggle()    },
     { name: 'demo',       isOpen: () => { const s = document.getElementById('demo-section'); return !!(s && s.classList.contains('visible')); }, close: () => window.DemoPanel       && DemoPanel.toggle()       },
     { name: 'connection', isOpen: () => !!(window.ConnectionPanel  && ConnectionPanel.isOpen()),  close: () => ConnectionPanel.toggle()  },
+    { name: 'environment', isOpen: () => !!(window.EnvironmentPanel && EnvironmentPanel.isOpen()), close: () => EnvironmentPanel.toggle() },
     { name: 'llm',        isOpen: () => !!(window.LlmConfigPanel   && LlmConfigPanel.isOpen()),   close: () => LlmConfigPanel.toggle()   },
+    { name: 'watchdog',   isOpen: () => !!(window.WatchdogPanel    && WatchdogPanel.isOpen()),    close: () => WatchdogPanel.toggle()    },
     { name: 'history',    isOpen: () => !!(window.HistoryListPanel && HistoryListPanel.isOpen()), close: () => HistoryListPanel.toggle() },
   ],
 

@@ -25,6 +25,7 @@ from aggregator.core.hermes_rca_agent import HermesRCAAgent
 from aggregator.core.rca_analyzer import RCAAnalyzer
 from aggregator.core.rca_followup import RcaFollowUpAssistant
 from aggregator.core.suspicious_absence import SuspiciousAbsenceDetector
+from aggregator.core.timeline import build_timeline
 from aggregator.models.followup import FollowUpMessage, FollowUpResponse
 from aggregator.models.query import QueryRequest
 from aggregator.models.rca import LogEvidence, RCAResult
@@ -159,6 +160,13 @@ class SignalAggregator:
             include_traces=request.include_traces,
         )
         correlations = _sort_correlation_events([*correlations, *absence_events])
+        timeline = build_timeline(
+            metrics=metrics,
+            logs=logs,
+            traces=traces,
+            correlations=correlations,
+            window_start=window.start,
+        )
 
         # Build preliminary result so RCA can read it
         total_ms = (time.monotonic() - t0) * 1000
@@ -174,6 +182,7 @@ class SignalAggregator:
             logs=logs,
             traces=traces,
             correlations=correlations,
+            timeline=timeline,
         )
 
         # RCA — only runs when explicitly requested and error signals exist

@@ -1,4 +1,4 @@
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +13,21 @@ class Settings(BaseSettings):
     prometheus_url: str = "http://localhost:9090"
     loki_url: str = "http://localhost:3100"
     jaeger_url: str = "http://localhost:16686"
+
+    # Multi-environment profiles (used by /api/environment)
+    environment_name: str = Field(
+        default="local",
+        validation_alias=AliasChoices("ENVIRONMENT_NAME", "ENVIRONMENT"),
+    )  # local | staging | production
+    local_prometheus_url: str = "http://localhost:9090"
+    local_loki_url: str = "http://localhost:3100"
+    local_jaeger_url: str = "http://localhost:16686"
+    staging_prometheus_url: str | None = None
+    staging_loki_url: str | None = None
+    staging_jaeger_url: str | None = None
+    production_prometheus_url: str | None = None
+    production_loki_url: str | None = None
+    production_jaeger_url: str | None = None
 
     # HTTP client
     http_timeout_seconds: float = 30.0
@@ -63,6 +78,21 @@ class Settings(BaseSettings):
     demo_service_a_url: str = "http://service-a:8001"
     demo_service_c_url: str = "http://service-c:8003"
     demo_service_d_url: str = "http://service-d:8004"
+
+    # Watchdog mode
+    watchdog_enabled: bool = False
+    watchdog_interval_seconds: int = 60
+    watchdog_lookback_minutes: int = 15
+    watchdog_anomaly_threshold: float = 0.7
+
+    # Notifications
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str | None = None
+    smtp_use_starttls: bool = True
+    alert_email: str | None = None
 
     @field_validator("prometheus_url", "loki_url", "jaeger_url", "hermes_api_url", mode="before")
     @classmethod
