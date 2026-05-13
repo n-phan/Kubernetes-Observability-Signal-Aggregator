@@ -50,6 +50,7 @@ class RcaPanel {
     `;
     return panel;
   }
+
   // ── Failed view (RCA ran but errored — bad/missing key, unsupported provider, API error) ──
   _buildFailed(rca, rcaBackend) {
     const backend = rcaBackend === 'llm' ? 'llm' : 'hermes';

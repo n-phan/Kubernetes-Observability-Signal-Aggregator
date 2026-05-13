@@ -18,14 +18,7 @@ from aggregator.demo import router as demo_router
 from aggregator.models.followup import FollowUpRequest, FollowUpResponse
 from aggregator.models.query import QueryRequest
 from aggregator.models.result import UnifiedResult
-from aggregator.watchdog import WatchdogMonitor, AlertNotificationBridge
-from aggregator.notifier import (
-    NotificationManager,
-    SlackNotifier,
-    SNSNotifier,
-    SmtpEmailNotifier,
-    EmailNotifier,
-)
+from aggregator.watchdog import AutoWatchdog
 
 _INFRA_SERVICES: frozenset[str] = frozenset(
     {"prometheus", "loki", "jaeger", "promtail", "aggregator", "node", "node-exporter"}
@@ -40,72 +33,23 @@ logging.basicConfig(level=settings.log_level.upper())
 logger = logging.getLogger(__name__)
 
 _aggregator: SignalAggregator | None = None
-_watchdog: WatchdogMonitor | None = None
-_notification_manager: NotificationManager | None = None
-_current_environment: str = settings.environment
+_watchdog: AutoWatchdog | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _aggregator, _watchdog, _notification_manager
+    global _aggregator, _watchdog
     await history.init_db()
     _aggregator = SignalAggregator()
-    
-    # Initialize notification manager
-    _notification_manager = NotificationManager()
-    if settings.slack_webhook_url:
-        _notification_manager.add_provider(SlackNotifier(settings.slack_webhook_url))
-    if settings.sns_topic_arn:
-        _notification_manager.add_provider(SNSNotifier(settings.sns_topic_arn, settings.sns_region))
-    # Prefer direct SMTP email when configured.
-    if (
-        settings.smtp_host
-        and settings.smtp_username
-        and settings.smtp_password
-        and settings.smtp_from_email
-        and settings.alert_email
-    ):
-        _notification_manager.add_provider(
-            SmtpEmailNotifier(
-                smtp_host=settings.smtp_host,
-                smtp_port=settings.smtp_port,
-                smtp_username=settings.smtp_username,
-                smtp_password=settings.smtp_password,
-                from_email=settings.smtp_from_email,
-                to_email=settings.alert_email,
-                use_starttls=settings.smtp_use_starttls,
-            )
-        )
-    elif settings.mailgun_domain and settings.mailgun_api_key and settings.alert_email:
-        _notification_manager.add_provider(
-            EmailNotifier(
-                mailgun_domain=settings.mailgun_domain,
-                mailgun_key=settings.mailgun_api_key,
-                to_email=settings.alert_email,
-            )
-        )
-    
-    # Initialize watchdog
-    _watchdog = WatchdogMonitor(query_function=_aggregator.query)
-    # Connect watchdog alerts to notification manager (works whether started now or later via API).
-    if _notification_manager.providers:
-        bridge = AlertNotificationBridge(_notification_manager)
-        _watchdog.add_alert_callback(bridge.on_alert)
-
+    _watchdog = AutoWatchdog(aggregator_getter=lambda: _aggregator)
     if settings.watchdog_enabled:
-        # Start watchdog for all registered services
-        services = await list_services()
         await _watchdog.start(
-            services=services,
-            check_interval_seconds=settings.watchdog_interval_seconds,
+            interval_seconds=settings.watchdog_interval_seconds,
             lookback_minutes=settings.watchdog_lookback_minutes,
             anomaly_threshold=settings.watchdog_anomaly_threshold,
         )
-    
     logger.info("Signal aggregator started")
     yield
-    
-    # Cleanup
     if _watchdog:
         await _watchdog.stop()
     if _aggregator:
@@ -181,6 +125,17 @@ class UpdateServiceGithubRequest(BaseModel):
     github_repo: str | None = None
     github_branch: str | None = None
     github_path_prefix: str | None = None
+
+
+class EnvironmentRequest(BaseModel):
+    name: str  # local | staging | production
+
+
+class WatchdogRequest(BaseModel):
+    enabled: bool
+    interval_seconds: int = 60
+    lookback_minutes: int = 15
+    anomaly_threshold: float = 0.7
 
 
 # ── Service registration endpoints ────────────────────────────────────────────
@@ -414,83 +369,104 @@ async def config_view() -> dict[str, object]:
         "default_lookback_minutes": settings.default_lookback_minutes,
         "max_log_lines": settings.max_log_lines,
         "max_traces": settings.max_traces,
-        "environment": _current_environment,
-        "watchdog_enabled": _watchdog.state.enabled if _watchdog else False,
     }
 
 
-# ── Watchdog endpoints ────────────────────────────────────────────────────────
-
-class WatchdogRequest(BaseModel):
-    enabled: bool
-    services: list[str]
-    check_interval_seconds: int = 60
-    lookback_minutes: int = 15
-    anomaly_threshold: float = 0.7
-
-
-@app.post("/api/watchdog")
-async def toggle_watchdog(request: WatchdogRequest) -> dict[str, object]:
-    """Start or stop watchdog monitoring."""
-    if _watchdog is None:
-        raise HTTPException(status_code=503, detail="Watchdog not initialized")
-
-    if request.enabled:
-        await _watchdog.start(
-            services=request.services,
-            check_interval_seconds=request.check_interval_seconds,
-            lookback_minutes=request.lookback_minutes,
-            anomaly_threshold=request.anomaly_threshold,
+def _env_urls(name: str) -> dict[str, str]:
+    env = name.lower()
+    mapping = {
+        "local": {
+            "prometheus_url": settings.local_prometheus_url,
+            "loki_url": settings.local_loki_url,
+            "jaeger_url": settings.local_jaeger_url,
+        },
+        "staging": {
+            "prometheus_url": settings.staging_prometheus_url,
+            "loki_url": settings.staging_loki_url,
+            "jaeger_url": settings.staging_jaeger_url,
+        },
+        "production": {
+            "prometheus_url": settings.production_prometheus_url,
+            "loki_url": settings.production_loki_url,
+            "jaeger_url": settings.production_jaeger_url,
+        },
+    }
+    if env not in mapping:
+        raise HTTPException(status_code=400, detail="Environment must be local, staging, or production")
+    urls = mapping[env]
+    missing = [k for k, v in urls.items() if not v]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing URLs for {env}: {', '.join(missing)}",
         )
-        return {"enabled": True, "services": request.services}
-    else:
-        await _watchdog.stop()
-        return {"enabled": False}
+    return {k: v.rstrip("/") for k, v in urls.items()}
 
 
-@app.get("/api/watchdog/alerts")
-async def get_watchdog_alerts(limit: int = 10) -> dict[str, object]:
-    """Retrieve recent watchdog alerts."""
-    if _watchdog is None:
-        raise HTTPException(status_code=503, detail="Watchdog not initialized")
-
-    alerts = await _watchdog.get_alerts(limit)
-    return {"alerts": [a.model_dump() for a in alerts]}
-
-
-@app.delete("/api/watchdog/alerts")
-async def clear_watchdog_alerts() -> dict[str, str]:
-    """Clear all watchdog alerts."""
-    if _watchdog is None:
-        raise HTTPException(status_code=503, detail="Watchdog not initialized")
-
-    await _watchdog.clear_alerts()
-    return {"cleared": "ok"}
-
-
-# ── Environment management endpoints ──────────────────────────────────────────
-
-class EnvironmentRequest(BaseModel):
-    environment: str
+@app.get("/api/environment")
+async def get_environment() -> dict[str, object]:
+    return {
+        "current": settings.environment_name,
+        "current_urls": {
+            "prometheus_url": settings.prometheus_url,
+            "loki_url": settings.loki_url,
+            "jaeger_url": settings.jaeger_url,
+        },
+        "available": ["local", "staging", "production"],
+    }
 
 
 @app.post("/api/environment")
 async def set_environment(request: EnvironmentRequest) -> dict[str, object]:
-    """Switch to a different environment (local, staging, production)."""
-    global _current_environment
-    valid_envs = ["local", "staging", "production"]
-    if request.environment not in valid_envs:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid environment. Must be one of: {', '.join(valid_envs)}"
+    global _aggregator
+    urls = _env_urls(request.name)
+
+    settings.environment_name = request.name.lower()
+    settings.prometheus_url = urls["prometheus_url"]
+    settings.loki_url = urls["loki_url"]
+    settings.jaeger_url = urls["jaeger_url"]
+
+    if _aggregator:
+        await _aggregator.close()
+    _aggregator = SignalAggregator()
+
+    return {
+        "ok": True,
+        "environment": settings.environment_name,
+        "urls": urls,
+    }
+
+
+@app.get("/api/watchdog")
+async def watchdog_status() -> dict[str, object]:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    return _watchdog.status()
+
+
+@app.post("/api/watchdog")
+async def watchdog_toggle(request: WatchdogRequest) -> dict[str, object]:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    if request.enabled:
+        return await _watchdog.start(
+            interval_seconds=request.interval_seconds,
+            lookback_minutes=request.lookback_minutes,
+            anomaly_threshold=request.anomaly_threshold,
         )
-
-    _current_environment = request.environment
-    logger.info("Environment switched to: %s", request.environment)
-    return {"environment": request.environment}
+    return await _watchdog.stop()
 
 
-@app.get("/api/environment")
-async def get_environment() -> dict[str, str]:
-    """Get current environment."""
-    return {"environment": _current_environment}
+@app.get("/api/watchdog/alerts")
+async def watchdog_alerts() -> dict[str, object]:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    return {"alerts": _watchdog.get_alerts()}
+
+
+@app.delete("/api/watchdog/alerts")
+async def clear_watchdog_alerts() -> dict[str, object]:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    _watchdog.clear_alerts()
+    return {"ok": True}

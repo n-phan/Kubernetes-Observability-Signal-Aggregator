@@ -1,77 +1,34 @@
-/**
- * EnvironmentPanel — Multi-environment support.
- *
- * Allows developers to switch between local, staging, and production
- * observability backends without restarting the application.
- */
-
 const EnvironmentPanel = {
-  STORAGE_KEY: 'observability-env',
   _built: false,
-  _msgTimer: null,
 
-  /**
-   * Set the current environment and store in localStorage.
-   */
-  _getCurrentEnvironment() {
-    return localStorage.getItem(this.STORAGE_KEY) || 'local';
-  },
-
-  _getEndpoint() {
-    const input = document.getElementById('inp-endpoint');
-    const raw = input ? input.value.trim() : 'http://localhost:8080';
-    return (raw || 'http://localhost:8080').replace(/\/$/, '');
-  },
-
-  setEnvironment(env) {
-    const validEnvs = ['local', 'staging', 'production'];
-    if (!validEnvs.includes(env)) {
-      console.error('Invalid environment:', env);
-      return false;
-    }
-
-    localStorage.setItem(this.STORAGE_KEY, env);
-    console.log('Environment switched to:', env);
-
-    // Notify backend via configured aggregator endpoint.
-    fetch(`${this._getEndpoint()}/api/environment`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ environment: env }),
-    }).catch((err) => console.warn('Failed to notify backend of env change:', err));
-
-    return true;
-  },
-
-  /**
-   * Get the current environment.
-   */
-  getEnvironment() {
-    return this._getCurrentEnvironment();
-  },
-
-  _build() {
+  init() {
     if (this._built) return;
-    const existing = document.getElementById('env-section');
-    if (existing) {
-      this._built = true;
-      return;
-    }
     const section = document.createElement('section');
-    section.id = 'env-section';
+    section.id = 'environment-section';
     section.innerHTML = `
-      <div class="llm-bar">
-        <span class="llm-title">ENVIRONMENT</span>
-        <button class="llm-close" onclick="EnvironmentPanel.toggle()" title="Close">✕</button>
+      <div class="conn-bar">
+        <span class="conn-title">ENVIRONMENT</span>
+        <button class="conn-close" onclick="EnvironmentPanel.toggle()" title="Close">✕</button>
       </div>
-      <div class="llm-body">
-        <div class="llm-note">
-          Switch the active observability environment for queries.
-          Selection is stored in your browser and sent to the backend.
+      <div class="conn-body">
+        <div class="conn-note">Switch between local, staging, and production observability backends.</div>
+        <div class="conn-form">
+          <div class="field conn-wide">
+            <label for="env-name">Environment</label>
+            <select id="env-name">
+              <option value="local">local</option>
+              <option value="staging">staging</option>
+              <option value="production">production</option>
+            </select>
+          </div>
+          <div class="field conn-wide">
+            <label>Current backend URLs</label>
+            <div id="env-current" class="env-current">—</div>
+          </div>
         </div>
-        <div id="env-panel-host"></div>
-        <div class="llm-actions">
-          <span class="llm-msg" id="env-msg"></span>
+        <div class="conn-actions">
+          <button class="btn-query" id="env-apply">Apply environment</button>
+          <span class="conn-msg" id="env-msg"></span>
         </div>
       </div>
     `;
@@ -79,83 +36,72 @@ const EnvironmentPanel = {
     const main = document.querySelector('main');
     document.body.insertBefore(section, main);
 
-    const host = document.getElementById('env-panel-host');
-    host.appendChild(this.renderSelector());
-
+    document.getElementById('env-apply').addEventListener('click', () => this.apply());
     this._built = true;
   },
 
-  toggle() {
-    this._build();
-    const open = document.getElementById('env-section').classList.toggle('visible');
-    if (open && typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels('environment');
-    if (typeof Sidebar !== 'undefined') Sidebar.syncClusterBar();
-  },
-
   isOpen() {
-    const sec = document.getElementById('env-section');
-    return !!(sec && sec.classList.contains('visible'));
+    const s = document.getElementById('environment-section');
+    return !!(s && s.classList.contains('visible'));
   },
 
-  _flash(msg) {
-    const el = document.getElementById('env-msg');
-    if (!el) return;
-    el.textContent = msg;
-    el.className = 'llm-msg ok';
-    clearTimeout(this._msgTimer);
-    this._msgTimer = setTimeout(() => {
-      el.textContent = '';
-      el.className = 'llm-msg';
-    }, 2500);
+  async refresh() {
+    this.init();
+    const endpoint = ($('inp-endpoint')?.value || 'http://localhost:8080').replace(/\/$/, '');
+    const msg = $('env-msg');
+    try {
+      const resp = await fetch(`${endpoint}/api/environment`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      $('env-name').value = data.current || 'local';
+      const urls = data.current_urls || {};
+      $('env-current').textContent = `${urls.prometheus_url || '—'} | ${urls.loki_url || '—'} | ${urls.jaeger_url || '—'}`;
+      if (msg) msg.textContent = '';
+    } catch (err) {
+      if (msg) {
+        msg.className = 'conn-msg';
+        msg.textContent = `Failed to load environment: ${err.message}`;
+      }
+    }
   },
 
-  /**
-   * Render environment selector panel.
-   */
-  renderSelector() {
-    const panel = document.createElement('div');
-    panel.className = 'panel environment-panel';
+  async apply() {
+    const endpoint = ($('inp-endpoint')?.value || 'http://localhost:8080').replace(/\/$/, '');
+    const env = $('env-name').value;
+    const msg = $('env-msg');
+    try {
+      const resp = await fetch(`${endpoint}/api/environment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: env }),
+      });
+      if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error(txt || `HTTP ${resp.status}`);
+      }
+      await this.refresh();
+      if (msg) {
+        msg.className = 'conn-msg ok';
+        msg.textContent = `Switched to ${env}`;
+      }
+      if (typeof loadServices === 'function') loadServices();
+      if (typeof ClusterStatusPanel !== 'undefined') ClusterStatusPanel.refresh();
+    } catch (err) {
+      if (msg) {
+        msg.className = 'conn-msg';
+        msg.textContent = `Apply failed: ${err.message}`;
+      }
+    }
+  },
 
-    const label = document.createElement('label');
-    label.textContent = 'Environment:';
-
-    const select = document.createElement('select');
-    select.className = 'env-select';
-    const envs = ['local', 'staging', 'production'];
-    const currentEnvironment = this._getCurrentEnvironment();
-    envs.forEach((env) => {
-      const option = document.createElement('option');
-      option.value = env;
-      option.textContent = env.charAt(0).toUpperCase() + env.slice(1);
-      option.selected = currentEnvironment === env;
-      select.appendChild(option);
-    });
-
-    select.onchange = (e) => {
-      this.setEnvironment(e.target.value);
-      const badge = document.createElement('div');
-      badge.className = 'env-badge';
-      badge.textContent = `✓ Switched to ${e.target.value}`;
-      panel.appendChild(badge);
-      setTimeout(() => badge.remove(), 2000);
-      this._flash(`Environment set to ${e.target.value}`);
-    };
-
-    const info = document.createElement('div');
-    info.className = 'env-info';
-    info.innerHTML = `
-      <small>
-        Current: <strong>${currentEnvironment.toUpperCase()}</strong>
-        <br/>
-        (Switch to view metrics, logs, and traces from different clusters)
-      </small>
-    `;
-
-    panel.appendChild(label);
-    panel.appendChild(select);
-    panel.appendChild(info);
-
-    return panel;
+  toggle() {
+    this.init();
+    const open = document.getElementById('environment-section').classList.toggle('visible');
+    if (open) {
+      if (typeof Sidebar !== 'undefined') Sidebar.closeOtherPanels('environment');
+      this.refresh();
+    }
+    if (typeof Sidebar !== 'undefined') Sidebar.syncClusterBar();
   },
 };
 

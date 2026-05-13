@@ -208,6 +208,8 @@ async function runAnalyze(rcaBackend) {
     _rcaFollowupHistory = [];
     _lastRcaBackend = backend;
     _storeLastQuery({ target, namespace, lookback, endpoint, data, requestBody });
+    // The RcaPanel._buildFailed() view shows RCA errors to the user; also log them.
+    if (data.rca?.error) console.error('[RCA] analysis failed:', data.rca.error);
     if (demoRange) _pendingDemoWindow = null;
 
     // Surface RCA errors to the console so they're easy to inspect.
@@ -357,7 +359,7 @@ function renderResult(data, showRca = true, rcaBackend = null) {
   // Build all panels. Each is either a component instance (with .element)
   // or null (no data to show).
   const rcaPanel     = new RcaPanel({ rca: data.rca, showRca, hasErrors, followups: _rcaFollowupHistory, meta: data.meta, result: data, rcaBackend });
-  const timelinePanel = TimelinePanel.create(data.timeline);
+  const timelinePanel = TimelinePanel.create(data.timeline || []);
   const metricsPanel = MetricsPanel.create(data.metrics);
   const logsPanel    = LogsPanel.create(data.logs);
   const tracesPanel  = TracesPanel.create(data.traces);
@@ -366,8 +368,8 @@ function renderResult(data, showRca = true, rcaBackend = null) {
     new MetaBar(data),
     HistoryPanel.create(data.history),
     rcaPanel,
-    CorrelationsPanel.create(data.correlations),
     timelinePanel,
+    CorrelationsPanel.create(data.correlations),
     metricsPanel,
     logsPanel,
     tracesPanel,

@@ -46,9 +46,14 @@ const Sidebar = {
           <div class="sb-sub" id="sb-sub-setting">
             <button class="sb-svc" id="sb-conn-config">API Endpoint &amp; Namespace</button>
             <button class="sb-svc" id="sb-env-config">Environment</button>
-            <button class="sb-svc" id="sb-watchdog-config">Watchdog</button>
             <button class="sb-svc" id="sb-llm-config">Config LLM</button>
           </div>
+        </div>
+        <div class="sb-cta-wrap">
+          <button class="sb-watchdog-cta" id="sb-watchdog-cta">
+            <span class="sb-watchdog-cta-label">Watchdog</span>
+            <span class="sb-watchdog-cta-pill" id="sb-watchdog-pill">OFF</span>
+          </button>
         </div>
       </nav>
     `;
@@ -58,14 +63,14 @@ const Sidebar = {
     document.getElementById('sb-conn-config').addEventListener('click', () => {
       if (window.ConnectionPanel) ConnectionPanel.toggle();
     });
+    document.getElementById('sb-llm-config').addEventListener('click', () => {
+      if (window.LlmConfigPanel) LlmConfigPanel.toggle();
+    });
     document.getElementById('sb-env-config').addEventListener('click', () => {
       if (window.EnvironmentPanel) EnvironmentPanel.toggle();
     });
-    document.getElementById('sb-watchdog-config').addEventListener('click', () => {
+    document.getElementById('sb-watchdog-cta').addEventListener('click', () => {
       if (window.WatchdogPanel) WatchdogPanel.toggle();
-    });
-    document.getElementById('sb-llm-config').addEventListener('click', () => {
-      if (window.LlmConfigPanel) LlmConfigPanel.toggle();
     });
     document.getElementById('sb-head-history').addEventListener('click', () => {
       const bar = document.getElementById('sidebar');
@@ -79,6 +84,36 @@ const Sidebar = {
       const item = document.querySelector('.sb-item[data-key="service"]');
       if (item && item.classList.contains('open')) this.loadServices();
     });
+
+    document.addEventListener('obs:watchdog-status', (event) => {
+      this.setWatchdogIndicator(!!event?.detail?.enabled);
+    });
+
+    this.refreshWatchdogIndicator();
+    if (this._watchdogPoll) clearInterval(this._watchdogPoll);
+    this._watchdogPoll = setInterval(() => this.refreshWatchdogIndicator(), 10000);
+  },
+
+  _watchdogPoll: null,
+
+  setWatchdogIndicator(enabled) {
+    const cta = document.getElementById('sb-watchdog-cta');
+    const pill = document.getElementById('sb-watchdog-pill');
+    if (!cta || !pill) return;
+    cta.classList.toggle('on', enabled);
+    pill.textContent = enabled ? 'ON' : 'OFF';
+  },
+
+  async refreshWatchdogIndicator() {
+    const endpoint = ($('inp-endpoint')?.value || 'http://localhost:8080').trim().replace(/\/$/, '');
+    try {
+      const resp = await fetch(`${endpoint}/api/watchdog`);
+      if (!resp.ok) return;
+      const status = await resp.json();
+      this.setWatchdogIndicator(!!status.enabled);
+    } catch (_) {
+      // Keep last-known indicator state when backend is temporarily unreachable.
+    }
   },
 
   // Collapse the rail to an icon-only strip, or expand it back.
@@ -99,8 +134,8 @@ const Sidebar = {
     { name: 'demo',       isOpen: () => { const s = document.getElementById('demo-section'); return !!(s && s.classList.contains('visible')); }, close: () => window.DemoPanel       && DemoPanel.toggle()       },
     { name: 'connection', isOpen: () => !!(window.ConnectionPanel  && ConnectionPanel.isOpen()),  close: () => ConnectionPanel.toggle()  },
     { name: 'environment', isOpen: () => !!(window.EnvironmentPanel && EnvironmentPanel.isOpen()), close: () => EnvironmentPanel.toggle() },
-    { name: 'watchdog',   isOpen: () => !!(window.WatchdogPanel && WatchdogPanel.isOpen()), close: () => WatchdogPanel.toggle() },
     { name: 'llm',        isOpen: () => !!(window.LlmConfigPanel   && LlmConfigPanel.isOpen()),   close: () => LlmConfigPanel.toggle()   },
+    { name: 'watchdog',   isOpen: () => !!(window.WatchdogPanel    && WatchdogPanel.isOpen()),    close: () => WatchdogPanel.toggle()    },
     { name: 'history',    isOpen: () => !!(window.HistoryListPanel && HistoryListPanel.isOpen()), close: () => HistoryListPanel.toggle() },
   ],
 
@@ -171,8 +206,8 @@ const Sidebar = {
     if (mgr) mgr.addEventListener('click', () => { if (window.ServicePanel) ServicePanel.toggle(); });
   },
 
-  // Select a service as the active query target and immediately run a query
-  // against it (one click = pick + query). RCA stays opt-in via the Analyze button.
+  // Select a service as the active query target. (Doesn't change the right-hand
+  // view — the user clicks Query when ready.)
   selectService(name) {
     const sel = $('inp-target');
     if (sel) {
@@ -191,7 +226,5 @@ const Sidebar = {
     );
     // Refresh the cluster panel so its "Pods of <target>" section updates.
     if (typeof ClusterStatusPanel !== 'undefined') ClusterStatusPanel.refresh();
-    // Auto-run a query for the picked service (no-op if one is already in flight).
-    if (typeof runQuery === 'function') runQuery();
   },
 };

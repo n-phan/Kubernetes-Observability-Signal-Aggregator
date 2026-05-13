@@ -1,206 +1,122 @@
-"""
-Incident timeline — show causal ordering of signals.
-
-Extracts timestamps from metrics, logs, and traces, then determines the
-sequence of events to answer "did the metric spike cause the error logs,
-or vice versa?"
-"""
 from __future__ import annotations
 
-import logging
-import math
-from datetime import datetime, timedelta
-from enum import Enum
-from uuid import uuid4
+from datetime import datetime, timezone
 
-from pydantic import BaseModel, Field
-
-from aggregator.models.signals import LogsSignal, MetricsSignal, TracesSignal
-
-logger = logging.getLogger(__name__)
-
-
-class EventType(str, Enum):
-    """String enum compatible with Python 3.9+"""
-    METRIC_SPIKE = "metric_spike"
-    LOG_BURST = "log_burst"
-    TRACE_ERROR = "trace_error"
-    LATENCY_SPIKE = "latency_spike"
-
-
-class TimelineEvent(BaseModel):
-    """A single event in the incident timeline."""
-
-    event_id: str = Field(default_factory=lambda: str(uuid4())[:8])
-    timestamp: datetime
-    event_type: EventType
-    severity: str  # info | warn | error
-    summary: str
-    details: dict = Field(default_factory=dict)
-
-
-class IncidentTimeline(BaseModel):
-    """Ordered sequence of events in an incident."""
-
-    events: list[TimelineEvent] = Field(default_factory=list)
-    earliest_event: datetime | None = None
-    latest_event: datetime | None = None
-    total_span_seconds: float = 0.0
-    dominant_cause: str | None = None  # "metrics" | "logs" | "traces"
+from aggregator.models.result import CorrelationEvent, TimelineEvent
+from aggregator.models.signals import LogsSignal, MetricsSignal, Severity, TracesSignal
 
 
 def build_timeline(
+    *,
     metrics: MetricsSignal,
     logs: LogsSignal,
     traces: TracesSignal,
-) -> IncidentTimeline:
-    """
-    Extract all signal events and sort by timestamp to reveal causality.
-
-    Returns an ordered timeline showing which type of event occurred first,
-    allowing operators to understand the incident flow.
-    """
+    correlations: list[CorrelationEvent],
+    window_start: datetime,
+) -> list[TimelineEvent]:
+    """Build a causal timeline from timestamped signals in the current window."""
     events: list[TimelineEvent] = []
 
-    # --- Extract metric events ---
+    metric_event = _metric_spike_event(metrics)
+    if metric_event:
+        events.append(_with_offset(metric_event, window_start))
+
+    log_event = _log_burst_event(logs)
+    if log_event:
+        events.append(_with_offset(log_event, window_start))
+
+    trace_event = _trace_latency_event(traces)
+    if trace_event:
+        events.append(_with_offset(trace_event, window_start))
+
+    for event in correlations:
+        ts = event.timestamp or _fallback_now(window_start)
+        events.append(
+            _with_offset(
+                TimelineEvent(
+                    timestamp=ts,
+                    source="correlation",
+                    severity=event.severity,
+                    title=event.kind.replace("_", " ").title(),
+                    detail=event.description,
+                ),
+                window_start,
+            )
+        )
+
+    events.sort(key=lambda e: e.timestamp)
+    return events
+
+
+def _metric_spike_event(metrics: MetricsSignal) -> TimelineEvent | None:
     for series in metrics.series:
         if not series.samples:
             continue
-
-        numeric_samples = [
-            s for s in series.samples
-            if isinstance(s.value, (int, float)) and not math.isnan(float(s.value))
-        ]
-        if len(numeric_samples) < 2:
+        peak_sample = max(
+            (s for s in series.samples if s.value is not None),
+            key=lambda s: s.value,
+            default=None,
+        )
+        if not peak_sample:
             continue
+        return TimelineEvent(
+            timestamp=_as_utc(peak_sample.timestamp),
+            source="metric",
+            severity="warn",
+            title=f"{series.name} peak",
+            detail=f"Peak value {peak_sample.value:.4g}",
+        )
+    return None
 
-        # Detect spikes: compare peak to baseline
-        baseline = _percentile([float(s.value) for s in numeric_samples], 25)
-        peak = max(float(s.value) for s in numeric_samples)
 
-        if peak > baseline * 2:  # 2x baseline = notable spike
-            peak_sample = max(numeric_samples, key=lambda s: float(s.value))
-            events.append(
-                TimelineEvent(
-                    timestamp=peak_sample.timestamp,
-                    event_type=EventType.METRIC_SPIKE,
-                    severity="warn",
-                    summary=f"Metric spike in {series.name}",
-                    details={
-                        "metric_name": series.name,
-                        "baseline_value": baseline,
-                        "peak_value": peak,
-                        "labels": series.labels,
-                    },
-                )
-            )
-
-    # --- Extract log events ---
-    if logs.lines:
-        error_logs = [l for l in logs.lines if l.severity.value in ("error", "critical")]
-        if error_logs:
-            first_error = min(error_logs, key=lambda l: l.timestamp)
-            last_error = max(error_logs, key=lambda l: l.timestamp)
-            events.append(
-                TimelineEvent(
-                    timestamp=first_error.timestamp,
-                    event_type=EventType.LOG_BURST,
-                    severity="error",
-                    summary=f"Error logs began ({len(error_logs)} total)",
-                    details={
-                        "error_count": len(error_logs),
-                        "first_error": first_error.message[:100],
-                        "last_error": last_error.message[:100],
-                    },
-                )
-            )
-
-    # --- Extract trace events ---
-    if traces.traces:
-        error_traces = [t for t in traces.traces if t.has_errors]
-        if error_traces:
-            first_error_trace = min(error_traces, key=lambda t: t.root_span.start_time if t.root_span else t.spans[0].start_time if t.spans else datetime.now())
-            events.append(
-                TimelineEvent(
-                    timestamp=first_error_trace.root_span.start_time if first_error_trace.root_span else first_error_trace.spans[0].start_time if first_error_trace.spans else datetime.now(),
-                    event_type=EventType.TRACE_ERROR,
-                    severity="error",
-                    summary=f"Distributed traces showed errors ({len(error_traces)} total)",
-                    details={
-                        "error_count": len(error_traces),
-                        "first_error_trace_id": first_error_trace.trace_id,
-                    },
-                )
-            )
-
-        # Detect latency spikes
-        if traces.traces:
-            latencies = [t.duration_ms for t in traces.traces]
-            baseline_latency = _percentile(latencies, 50)
-            peak_latency = max(latencies)
-
-            if peak_latency > baseline_latency * 3:  # 3x p50 = notable spike
-                slow_trace = max(traces.traces, key=lambda t: t.duration_ms)
-                events.append(
-                    TimelineEvent(
-                        timestamp=slow_trace.root_span.start_time if slow_trace.root_span else slow_trace.spans[0].start_time if slow_trace.spans else datetime.now(),
-                        event_type=EventType.LATENCY_SPIKE,
-                        severity="warn",
-                        summary=f"Request latency spike ({peak_latency:.0f}ms)",
-                        details={
-                            "baseline_ms": baseline_latency,
-                            "peak_ms": peak_latency,
-                            "trace_id": slow_trace.trace_id,
-                        },
-                    )
-                )
-
-    # --- Sort and compute derived fields ---
-    events.sort(key=lambda e: e.timestamp)
-
-    if events:
-        dominant_cause = _determine_dominant_cause(events)
-    else:
-        dominant_cause = None
-
-    return IncidentTimeline(
-        events=events,
-        earliest_event=events[0].timestamp if events else None,
-        latest_event=events[-1].timestamp if events else None,
-        total_span_seconds=(
-            (events[-1].timestamp - events[0].timestamp).total_seconds()
-            if len(events) > 1
-            else 0.0
-        ),
-        dominant_cause=dominant_cause,
+def _log_burst_event(logs: LogsSignal) -> TimelineEvent | None:
+    if not logs.lines:
+        return None
+    error_lines = [l for l in logs.lines if l.severity in (Severity.ERROR, Severity.CRITICAL)]
+    line = error_lines[0] if error_lines else logs.lines[0]
+    sev = "error" if error_lines else "info"
+    return TimelineEvent(
+        timestamp=_as_utc(line.timestamp),
+        source="log",
+        severity=sev,
+        title="Error log burst" if error_lines else "Log activity",
+        detail=line.message[:180],
     )
 
 
-def _percentile(values: list[float], p: int) -> float:
-    """Compute the p-th percentile of a list (0-100)."""
-    if not values:
-        return 0.0
-    sorted_vals = sorted(values)
-    idx = int(len(sorted_vals) * p / 100)
-    return sorted_vals[max(0, min(idx, len(sorted_vals) - 1))]
-
-
-def _determine_dominant_cause(events: list[TimelineEvent]) -> str | None:
-    """
-    Infer the likely root cause by examining event order.
-
-    Simple heuristic: whichever signal type appears first is likely causal.
-    """
-    if not events:
+def _trace_latency_event(traces: TracesSignal) -> TimelineEvent | None:
+    if not traces.traces:
         return None
+    root_times = []
+    for trace in traces.traces:
+        root = trace.root_span
+        if root:
+            root_times.append((_as_utc(root.start_time), trace.duration_ms, trace.trace_id))
+    if not root_times:
+        return None
+    ts, duration_ms, trace_id = max(root_times, key=lambda item: item[1])
+    return TimelineEvent(
+        timestamp=ts,
+        source="trace",
+        severity="warn" if duration_ms >= 1000 else "info",
+        title="Slow trace observed",
+        detail=f"trace={trace_id} duration={duration_ms:.0f} ms",
+    )
 
-    first_event = events[0]
 
-    if first_event.event_type == EventType.METRIC_SPIKE:
-        return "metrics"
-    elif first_event.event_type in (EventType.LOG_BURST, EventType.TRACE_ERROR):
-        return "logs"
-    elif first_event.event_type == EventType.LATENCY_SPIKE:
-        return "traces"
+def _with_offset(event: TimelineEvent, window_start: datetime) -> TimelineEvent:
+    start = _as_utc(window_start)
+    ts = _as_utc(event.timestamp)
+    event.offset_seconds = max(0.0, (ts - start).total_seconds())
+    event.timestamp = ts
+    return event
 
-    return None
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _fallback_now(window_start: datetime) -> datetime:
+    return _as_utc(window_start)

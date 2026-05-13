@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field, computed_field
@@ -81,7 +81,7 @@ class LogLine(BaseModel):
         message: str,
         labels: dict[str, str],
     ) -> "LogLine":
-        ts = datetime.fromtimestamp(int(ts_ns) / 1e9, tz=timezone.utc)
+        ts = datetime.fromtimestamp(int(ts_ns) / 1e9)
         raw_level = labels.get("level", labels.get("severity", "")).lower()
         severity = _parse_severity(raw_level)
         return cls(timestamp=ts, message=message, severity=severity, labels=labels)

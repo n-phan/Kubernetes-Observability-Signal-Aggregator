@@ -1,206 +1,168 @@
-"""
-Auto-watchdog mode — continuously monitor for anomalies.
-
-Runs periodic queries in the background and surfaces anomalies
-without requiring the operator to manually check the dashboard.
-"""
 from __future__ import annotations
 
 import asyncio
-import inspect
+import contextlib
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Callable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 
-from pydantic import BaseModel, Field
+import yaml
 
+from aggregator.config import settings
 from aggregator.models.query import QueryRequest
+from aggregator.models.result import UnifiedResult
+from aggregator.notifier import Notifier
 
 logger = logging.getLogger(__name__)
 
 
-class WatchdogState(BaseModel):
-    """Current state of the watchdog."""
-
+@dataclass
+class WatchdogConfig:
     enabled: bool = False
-    active_services: list[str] = Field(default_factory=list)
-    check_interval_seconds: int = 60
+    interval_seconds: int = 60
     lookback_minutes: int = 15
-    anomaly_threshold: float = 0.7  # confidence threshold to alert
+    anomaly_threshold: float = 0.7
 
 
-class AnomalyAlert(BaseModel):
-    """An anomaly detected by the watchdog."""
-
-    detected_at: datetime
-    service: str
-    anomaly_type: str  # "error_spike", "latency_spike", "log_burst", etc.
-    severity: str  # info | warn | error | critical
-    confidence: float
-    summary: str
-    details: dict = Field(default_factory=dict)
-
-
-class WatchdogMonitor:
-    """
-    Background monitor that periodically checks services for anomalies.
-
-    Usage:
-        watchdog = WatchdogMonitor(query_function=aggregator.query)
-        await watchdog.start(services=["service-a", "service-b"])
-        # ... runs in background ...
-        await watchdog.stop()
-    """
-
-    def __init__(
-        self,
-        query_function: Callable,
-    ) -> None:
-        """
-        Initialize watchdog.
-
-        Args:
-            query_function: async function to call for each query
-                           signature: async def query(target, namespace, start, end) -> UnifiedResult
-        """
-        self.query_function = query_function
-        self.state = WatchdogState()
+class AutoWatchdog:
+    def __init__(self, *, aggregator_getter) -> None:
+        self._aggregator_getter = aggregator_getter
         self._task: asyncio.Task | None = None
-        self._alerts: list[AnomalyAlert] = []
-        self._callbacks: list[Callable[[AnomalyAlert], None]] = []
-
-    def add_alert_callback(self, callback: Callable[[AnomalyAlert], None]) -> None:
-        """Register a callback to be called when an anomaly is detected."""
-        self._callbacks.append(callback)
-
-    async def start(
-        self,
-        services: list[str],
-        check_interval_seconds: int = 60,
-        lookback_minutes: int = 15,
-        anomaly_threshold: float = 0.7,
-    ) -> None:
-        """Start the watchdog monitor."""
-        # If already running, restart with fresh config to avoid duplicate loops.
-        if self._task and not self._task.done():
-            await self.stop()
-
-        self.state.enabled = True
-        # Preserve order while removing duplicates.
-        self.state.active_services = list(dict.fromkeys(services))
-        self.state.check_interval_seconds = check_interval_seconds
-        self.state.lookback_minutes = lookback_minutes
-        self.state.anomaly_threshold = anomaly_threshold
-
-        logger.info(
-            f"Watchdog started for {len(services)} services "
-            f"(interval={check_interval_seconds}s)"
+        self._alerts: list[dict] = []
+        self._cfg = WatchdogConfig()
+        self._notifier = Notifier(
+            smtp_host=settings.smtp_host,
+            smtp_port=settings.smtp_port,
+            smtp_username=settings.smtp_username,
+            smtp_password=settings.smtp_password,
+            smtp_from_email=settings.smtp_from_email,
+            smtp_use_starttls=settings.smtp_use_starttls,
+            alert_email=settings.alert_email,
         )
 
-        self._task = asyncio.create_task(self._monitor_loop())
+    def status(self) -> dict[str, object]:
+        return {
+            "enabled": self._task is not None and not self._task.done(),
+            "interval_seconds": self._cfg.interval_seconds,
+            "lookback_minutes": self._cfg.lookback_minutes,
+            "anomaly_threshold": self._cfg.anomaly_threshold,
+            "alerts": len(self._alerts),
+        }
 
-    async def stop(self) -> None:
-        """Stop the watchdog monitor."""
-        self.state.enabled = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        logger.info("Watchdog stopped")
+    def get_alerts(self) -> list[dict]:
+        return list(reversed(self._alerts))
 
-    async def get_alerts(self, limit: int = 10) -> list[AnomalyAlert]:
-        """Get recent alerts (most recent first)."""
-        return self._alerts[:limit]
-
-    async def clear_alerts(self) -> None:
-        """Clear all stored alerts."""
+    def clear_alerts(self) -> None:
         self._alerts.clear()
 
-    async def _monitor_loop(self) -> None:
-        """Main monitoring loop — runs in background."""
-        while self.state.enabled:
-            try:
-                now = datetime.now(tz=timezone.utc)
-                window_end = now
-                window_start = now - timedelta(minutes=self.state.lookback_minutes)
+    async def start(self, *, interval_seconds: int, lookback_minutes: int, anomaly_threshold: float) -> dict[str, object]:
+        self._cfg.interval_seconds = max(15, interval_seconds)
+        self._cfg.lookback_minutes = max(1, lookback_minutes)
+        self._cfg.anomaly_threshold = min(1.0, max(0.0, anomaly_threshold))
 
-                # Query each service
-                for service in self.state.active_services:
-                    try:
-                        result = await self.query_function(
-                            QueryRequest(
-                                target=service,
-                                namespace="default",
-                                start=window_start.isoformat(),
-                                end=window_end.isoformat(),
-                                include_rca=False,
-                            )
-                        )
+        if self._task and not self._task.done():
+            return self.status()
 
-                        # Extract anomalies from correlations
-                        new_alerts = []
-                        for correlation in result.correlations:
-                            if (
-                                correlation.confidence >= self.state.anomaly_threshold
-                                and correlation.severity in ("error", "warn")
-                            ):
-                                alert = AnomalyAlert(
-                                    detected_at=now,
-                                    service=service,
-                                    anomaly_type=correlation.kind,
-                                    severity=correlation.severity,
-                                    confidence=correlation.confidence,
-                                    summary=correlation.description,
-                                    details={
-                                        "timestamp": correlation.timestamp,
-                                        "related_metric": correlation.related_metric,
-                                        "related_log": correlation.related_log_sample,
-                                    },
-                                )
-                                new_alerts.append(alert)
+        self._task = asyncio.create_task(self._run_loop(), name="obs-watchdog")
+        return self.status()
 
-                        # Store and dispatch alerts
-                        for alert in new_alerts:
-                            self._alerts.insert(0, alert)  # newest first
-                            for callback in self._callbacks:
-                                try:
-                                    result = callback(alert)
-                                    if inspect.isawaitable(result):
-                                        await result
-                                except Exception as e:
-                                    logger.error(f"Alert callback failed: {e}")
+    async def stop(self) -> dict[str, object]:
+        if self._task and not self._task.done():
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+        self._task = None
+        return self.status()
 
-                    except Exception as e:
-                        logger.error(f"Watchdog query failed for {service}: {e}")
-
-                # Wait for next check
-                await asyncio.sleep(self.state.check_interval_seconds)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Watchdog monitoring error: {e}")
-                await asyncio.sleep(5)  # Back off before retrying
-
-
-class AlertNotificationBridge:
-    """Bridge to send watchdog alerts to notification providers."""
-
-    def __init__(self, notification_manager) -> None:
-        self.notification_manager = notification_manager
-
-    async def on_alert(self, alert: AnomalyAlert) -> None:
-        """Called when watchdog detects an anomaly."""
-        await self.notification_manager.notify(
-            title=f"{alert.anomaly_type.upper()} detected in {alert.service}",
-            summary=alert.summary,
-            severity=alert.severity,
-            service_name=alert.service,
-            metadata={
-                "timestamp": alert.detected_at.isoformat(),
-                "confidence": f"{alert.confidence:.1%}",
-                "anomaly_type": alert.anomaly_type,
-            },
+    async def _run_loop(self) -> None:
+        logger.info(
+            "Auto-watchdog started interval=%ss lookback=%sm threshold=%.2f",
+            self._cfg.interval_seconds,
+            self._cfg.lookback_minutes,
+            self._cfg.anomaly_threshold,
         )
+        while True:
+            try:
+                await self._scan_once()
+            except Exception as exc:
+                logger.warning("Auto-watchdog scan failed: %s", exc)
+            await asyncio.sleep(self._cfg.interval_seconds)
+
+    async def _scan_once(self) -> None:
+        aggregator = self._aggregator_getter()
+        if aggregator is None:
+            return
+        for service in _load_services(settings.prometheus_config_path):
+            request = QueryRequest(
+                target=service,
+                namespace="default",
+                lookback_minutes=self._cfg.lookback_minutes,
+                include_rca=False,
+            )
+            result = await aggregator.query(request)
+            score = _score(result)
+            if score < self._cfg.anomaly_threshold:
+                continue
+            alert = {
+                "id": f"{service}-{int(datetime.now(tz=timezone.utc).timestamp())}",
+                "service": service,
+                "score": round(score, 3),
+                "severity": _severity(score),
+                "summary": _summary(result),
+                "created_at": datetime.now(tz=timezone.utc).isoformat(),
+            }
+            self._alerts.append(alert)
+            self._alerts = self._alerts[-300:]
+            channels = await self._notifier.notify(
+                service=service,
+                severity=alert["severity"],
+                summary=alert["summary"],
+                details=f"correlations={len(result.correlations)} errors={result.logs.error_count}",
+            )
+            if channels:
+                alert["channels"] = channels
+
+
+def _load_services(prometheus_path: str) -> list[str]:
+    path = Path(prometheus_path)
+    if not path.exists():
+        return []
+    with path.open() as fh:
+        cfg = yaml.safe_load(fh) or {}
+    services: list[str] = []
+    for job in cfg.get("scrape_configs", []):
+        name = job.get("job_name")
+        if not name or name in {"prometheus", "loki", "jaeger", "promtail", "aggregator", "node", "node-exporter"}:
+            continue
+        services.append(name)
+    return services
+
+
+def _score(result: UnifiedResult) -> float:
+    score = 0.0
+    if result.logs.total_lines:
+        score += min(0.5, result.logs.error_count / max(1, result.logs.total_lines))
+    if result.traces.p99_duration_ms:
+        score += min(0.3, result.traces.p99_duration_ms / 5000.0)
+    if result.correlations:
+        score += min(0.3, len(result.correlations) * 0.1)
+    return min(1.0, score)
+
+
+def _severity(score: float) -> str:
+    if score >= 0.8:
+        return "error"
+    if score >= 0.5:
+        return "warn"
+    return "info"
+
+
+def _summary(result: UnifiedResult) -> str:
+    if result.correlations:
+        return result.correlations[0].description
+    if result.logs.error_count > 0:
+        return f"{result.logs.error_count} error logs in window"
+    if result.traces.p99_duration_ms:
+        return f"p99 trace latency {result.traces.p99_duration_ms:.0f} ms"
+    return "Anomaly score threshold exceeded"

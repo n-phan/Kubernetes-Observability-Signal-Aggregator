@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -7,7 +5,6 @@ from pydantic import BaseModel, Field
 
 from aggregator.models.signals import MetricsSignal, LogsSignal, TracesSignal
 from aggregator.models.rca import RCAResult
-from aggregator.core.timeline import IncidentTimeline
 
 
 class CorrelationEvent(BaseModel):
@@ -27,6 +24,17 @@ class CorrelationEvent(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
+class TimelineEvent(BaseModel):
+    """A single incident timeline entry for causal ordering in the UI."""
+
+    timestamp: datetime
+    source: str  # metric | log | trace | correlation
+    severity: str = "info"
+    title: str
+    detail: str | None = None
+    offset_seconds: float = 0.0
+
+
 class QueryMeta(BaseModel):
     """Metadata attached to every query result — identity, time window, and timing."""
 
@@ -44,7 +52,6 @@ class HistoryOccurrence(BaseModel):
 
     created_at: datetime
     rca_summary: str | None = None
-    rca_root_cause: str | None = None
     rca_confidence: float | None = None
 
 
@@ -75,11 +82,9 @@ class UnifiedResult(BaseModel):
     logs: LogsSignal
     traces: TracesSignal
     correlations: list[CorrelationEvent] = Field(default_factory=list)
+    timeline: list[TimelineEvent] = Field(default_factory=list)
     rca: RCAResult = Field(default_factory=RCAResult)
     history: HistoryInfo | None = None  # populated only for notable queries
-    timeline: IncidentTimeline = Field(default_factory=lambda: IncidentTimeline())  # causal ordering of events
-
-    model_config = {"arbitrary_types_allowed": True}  # needed for timeline objects
 
     @property
     def has_any_errors(self) -> bool:

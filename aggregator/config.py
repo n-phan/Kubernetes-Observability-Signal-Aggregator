@@ -1,4 +1,6 @@
-from pydantic import field_validator
+from __future__ import annotations
+
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,15 +11,25 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # ── Multi-environment support ────────────────────────────────────────
-    # ENVIRONMENT can be "local", "staging", "production"
-    # When set, overrides backend URLs below unless explicitly provided
-    environment: str = "local"  # local | staging | production
-
     # Observability backends
     prometheus_url: str = "http://localhost:9090"
     loki_url: str = "http://localhost:3100"
     jaeger_url: str = "http://localhost:16686"
+
+    # Multi-environment profiles (used by /api/environment)
+    environment_name: str = Field(
+        default="local",
+        validation_alias=AliasChoices("ENVIRONMENT_NAME", "ENVIRONMENT"),
+    )  # local | staging | production
+    local_prometheus_url: str = "http://localhost:9090"
+    local_loki_url: str = "http://localhost:3100"
+    local_jaeger_url: str = "http://localhost:16686"
+    staging_prometheus_url: str | None = None
+    staging_loki_url: str | None = None
+    staging_jaeger_url: str | None = None
+    production_prometheus_url: str | None = None
+    production_loki_url: str | None = None
+    production_jaeger_url: str | None = None
 
     # HTTP client
     http_timeout_seconds: float = 30.0
@@ -78,21 +90,19 @@ class Settings(BaseSettings):
     demo_service_c_url: str = "http://service-c:8003"
     demo_service_d_url: str = "http://service-d:8004"
 
-    # ── Notifications ────────────────────────────────────────────────────
-    # Optional: Send RCA summaries to Slack, SNS, or email when anomalies detected
-    slack_webhook_url: str | None = None  # e.g. "https://hooks.slack.com/services/..."
-    sns_topic_arn: str | None = None      # e.g. "arn:aws:sns:us-east-1:123456789:alerts"
-    sns_region: str = "us-east-1"
+    # Watchdog mode
+    watchdog_enabled: bool = False
+    watchdog_interval_seconds: int = 60
+    watchdog_lookback_minutes: int = 15
+    watchdog_anomaly_threshold: float = 0.7
 
-    # Direct SMTP email (no Mailgun/SendGrid required)
-    smtp_host: str | None = None          # e.g. "smtp.gmail.com" or your own SMTP relay
+    # Notifications (email)
+    smtp_host: str | None = None
     smtp_port: int = 587
     smtp_username: str | None = None
     smtp_password: str | None = None
     smtp_from_email: str | None = None
     smtp_use_starttls: bool = True
-
-    # Recipient email address for alerts
     alert_email: str | None = None
 
     # Legacy Mailgun settings (kept for backward compatibility)

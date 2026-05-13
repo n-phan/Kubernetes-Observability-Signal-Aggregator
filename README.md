@@ -1,70 +1,59 @@
 # K8s Observability Signal Aggregator
 
-A unified incident investigation stack that queries Prometheus, Loki, and Jaeger in parallel, correlates cross-signal anomalies, and optionally runs AI-powered RCA with follow-up Q&A.
+Queries Prometheus (metrics), Loki (logs), and Jaeger (traces) in parallel, correlates the
+results, and runs an AI-powered root cause analysis using the Anthropic API — all behind a
+single web UI.
 
-## Features
+The core problem this solves: during an incident, engineers typically have to open three
+separate dashboards, manually copy timestamps between them, and try to connect the dots
+across tools. This project pulls all three signals into one view, adds a rule engine that
+flags cross-signal patterns, and uses Claude to summarize what went wrong.
 
-- Unified timeline generation for incident causality ordering.
-- Suspicious telemetry-absence detection (for example traffic without logs/traces).
-- RCA follow-up chat after analysis completes.
-- Per-request LLM override from the UI Config LLM panel.
-- Hermes RCA mode with tools-first investigation flow.
-- Runtime service registration and per-service GitHub metadata management.
-- GitHub code-link enrichment using stack frames and search terms.
-- Environment switching endpoint and panel (local, staging, production).
-- Auto-watchdog background monitoring with alert APIs.
-- Optional Slack, SNS, SMTP, and Mailgun alert delivery.
-- Demo scenarios streamed via Server-Sent Events, including exact query window reuse.
+It runs two ways:
 
-## Architecture at a glance
+- **Local Docker stack** — `docker compose up` brings up the aggregator, the UI, the three
+  observability backends, `node-exporter`, and four demo microservices. Good for trying it
+  out and for development.
+- **Against a real Kubernetes cluster** — point it at an in-cluster Prometheus/Loki/Jaeger
+  (e.g. `kube-prometheus-stack` + `loki-stack`). Then the namespace selector, the per-node
+  Cluster Status panel, and per-pod status all become meaningful. See
+  [Deploying to Kubernetes](#deploying-to-kubernetes).
 
-A single query request does the following:
+---
 
-1. Fan-out to metrics, logs, and traces concurrently.
-2. Correlate anomalies and cross-signal patterns.
-3. Add suspicious-absence events when missing telemetry is meaningful.
-4. Build an incident timeline.
-5. Optionally run RCA.
-6. Optionally enrich RCA with GitHub code references.
-7. Persist notable incidents for recurrence history.
+## How it works
 
-See [aggregator/README.md](aggregator/README.md) for backend internals and [infra/README.md](infra/README.md) for infrastructure wiring.
+A query for a target service fans out concurrently to Prometheus, Loki, and Jaeger. The
+results are correlated by a rule engine that detects cross-signal patterns (e.g. an HTTP
+error spike that coincides with a log burst). Optionally, the correlated signals are sent
+to an LLM for root cause analysis. Notable queries are recorded so a recurring failure mode
+can be distinguished from a brand-new one ("has this happened before?").
 
-## UI overview
+RCA can also run through an optional Hermes OpenAI-compatible agent. Recent RCA updates add
+structured log evidence, suspicious telemetry-gap events, and a scoped follow-up chat after
+analysis completes.
 
-Open http://localhost:8081.
+Four demo microservices generate realistic signals. `service-a` and `service-b` are always
+present: `service-b` is intentionally flaky, with failure modes controllable via the
+in-browser **⚙ Demo** panel; `service-a` calls `service-b` and shows how downstream failures
+propagate (or get absorbed by retry / circuit breaker). `service-c` (payment processor) and
+`service-d` (inventory service) demonstrate multi-frame Python tracebacks that RCA can link
+to GitHub source lines. Each service can be registered / deregistered at runtime via the
+sidebar's **Service → Manage** panel.
 
-Main capabilities in the UI:
+When a service is registered, its GitHub repository can optionally be recorded in
+`infra/service-registry.yml` so RCA results include direct links to the relevant source
+lines. See [`infra/README.md`](infra/README.md) for the registry format.
 
-- Sidebar Service panel
-  - Pick target services discovered from Prometheus jobs.
-  - Add, update, remove services from the Manage Services flow.
-- Sidebar Setting panel
-  - Connection panel for API endpoint and namespace.
-  - Config LLM panel for request-level model/provider settings.
-  - Environment panel for local, staging, production switching.
-- Cluster Status panel
-  - CPU, memory, load, disk, network, plus per-target pod status when available.
-- Query result panels
-  - Meta and recurrence summary.
-  - RCA panel with confidence, actions, supporting evidence, log evidence, code references, follow-up chat.
-  - Correlations panel.
-  - Timeline panel.
-  - Metrics, Logs, Traces panels.
-- Watchdog panel
-  - Start/stop continuous monitoring and inspect anomaly alerts.
-- Demo panel
-  - Run incident scenarios and automatically pin next query to the exact scenario window.
+For the aggregator's internal architecture and request lifecycle, see
+[`aggregator/README.md`](aggregator/README.md). For the infrastructure layer (Prometheus,
+Loki, Promtail, Jaeger, node-exporter), see [`infra/README.md`](infra/README.md).
 
-## API surface
+---
 
-Core endpoints:
+## The web UI
 
-- GET /health
-- POST /query
-- GET /config
-- POST /rca/followup
-- GET /history
+Open **http://localhost:8081**.
 
 - **Left sidebar** — collapsible navigation rail:
   - **Service** — lists the registered services; click one to pick it as the query target.
@@ -91,33 +80,7 @@ Core endpoints:
   - **Metrics** — a table of series, each with an inline sparkline.
   - **Logs / Traces** — paginated, filterable; multi-line tracebacks merged into one entry.
 
-- GET /services
-- POST /services/test
-- POST /services/register
-- PUT /services/{name}
-- DELETE /services/{name}
-- GET /services/registry
-
-Demo endpoints:
-
-- GET /demo/config
-- POST /demo/reset
-- POST /demo/run/{scenario}
-
-Watchdog endpoints:
-
-- POST /api/watchdog
-- GET /api/watchdog/alerts
-- DELETE /api/watchdog/alerts
-
-Environment endpoints:
-
-- GET /api/environment
-- POST /api/environment
-
-Cluster status endpoints:
-
-- GET /cluster/status
+---
 
 ## Prerequisites
 
@@ -132,15 +95,19 @@ Cluster status endpoints:
   Windows some of these may be in a reserved range — see [Port conflicts](#port-conflicts))
 - ~5 GB of available RAM (nine containers)
 
-## Quick start with Docker
+---
 
-1. Create env file:
+## Quick start (local Docker)
+
+### 1. Clone and configure
 
 ```bash
+git clone <your-repo-url>
+cd Kubernetes-Observability-Signal-Aggregator
 cp .env.example .env
 ```
 
-2. Set at least one RCA key path:
+Open `.env` and set:
 
 ```
 # Enables the "Analyze with AI" button in the default RCA mode. (Alternatively,
@@ -159,23 +126,18 @@ HERMES_TIMEOUT_SECONDS=90
 HERMES_MAX_TOOL_ROUNDS=4
 HERMES_MAX_TOOL_CALLS=8
 HERMES_TOOL_LOOKBACK_MAX_MINUTES=120
-HERMES_MODEL=hermes-agent
-HERMES_TOOLS_ENABLED=true
-HERMES_INVESTIGATION_MODE=tools_first
 
 # Optional — adds a "Code references" section to RCA results with GitHub links.
 # Per-service repos live in infra/service-registry.yml; GITHUB_REPO is the fallback.
 GITHUB_TOKEN=github_pat_...
 ```
 
-`ANTHROPIC_API_KEY` is the only setting that must be filled in for the default RCA mode.
-To use Hermes, run a Hermes OpenAI-compatible API server and set `RCA_MODE=hermes`; Hermes
-first calls the aggregator overview tool, then can call read-only metrics, logs, traces,
-and correlation tools for drill-down evidence. If Hermes is unavailable, the aggregator
-falls back to the default one-shot RCA when `ANTHROPIC_API_KEY` is configured. The GitHub
-integration is purely optional — RCA produces a full analysis (summary, root cause,
-recommended actions) without it.
-`ANTHROPIC_API_KEY` is the only setting that must be filled in for the default RCA mode. To use Hermes, run a Hermes OpenAI-compatible API server and set `RCA_MODE=hermes`; Hermes first calls the aggregator overview tool, then can call read-only metrics, logs, traces, and correlation tools for drill-down evidence. If Hermes is unavailable, the aggregator falls back to the default one-shot RCA when `ANTHROPIC_API_KEY` is configured. The GitHub integration is purely optional — RCA produces a full analysis (summary, root cause, recommended actions) without it.
+`ANTHROPIC_API_KEY` is the only required setting for the default RCA mode (or set it later
+in the UI's Config LLM panel). To use Hermes, run a Hermes OpenAI-compatible API server and
+set `RCA_MODE=hermes` — Hermes first calls the aggregator's overview tool, then can call
+read-only metrics / logs / traces / correlation tools for drill-down evidence; if Hermes is
+unavailable it falls back to the default one-shot RCA. The GitHub integration is optional —
+RCA produces a full analysis without it.
 
 ### 2. Start the stack
 
@@ -183,107 +145,68 @@ recommended actions) without it.
 docker compose up -d --build
 ```
 
-4. Open:
+The first run pulls images and builds the Python services — a few minutes. Subsequent
+starts are faster.
 
-- UI: http://localhost:8081
-- API docs: http://localhost:8080/docs
+### 3. Open the web UI
+
+**http://localhost:8081**. Pick `service-a` or `service-b` from the sidebar **Service**
+list and click **Query**. If the panels are empty, generate some traffic with the **⚙ Demo**
+panel first (signals are shown for the last 30 minutes).
+
+### Port conflicts
+
+If `docker compose up` fails with *"ports are not available"* on 8001–8004 (common on
+Windows, where `netsh int ipv4 show excludedportrange protocol=tcp` reserves them for
+Hyper-V), remap the host side without touching the committed file — create a
+`docker-compose.override.yml` (gitignored):
+
+```yaml
+services:
+  service-a: { ports: !override [ "18001:8001" ] }
+  service-b: { ports: !override [ "18002:8002" ] }
+  service-c: { ports: !override [ "18003:8003" ] }
+  service-d: { ports: !override [ "18004:8004" ] }
+```
+
+Container ports are unchanged, so service-to-service traffic and the Demo runner are
+unaffected — only the host-side URLs become `localhost:1800x`.
+
+---
 
 ## Ports
 
 | Service | URL | Notes |
 |---|---|---|
-| Web UI | http://localhost:8081 | Main dashboard |
-| Aggregator API | http://localhost:8080 | Query and management API |
-| Aggregator docs | http://localhost:8080/docs | OpenAPI UI |
-| service-a | http://localhost:8001 | Upstream demo service |
-| service-b | http://localhost:8002 | Flaky downstream demo service |
-| service-c | http://localhost:8003 | Payment demo service |
-| service-d | http://localhost:8004 | Inventory demo service |
-| Prometheus | http://localhost:9090 | Metrics backend |
-| Loki | http://localhost:3100 | Log backend |
-| Jaeger | http://localhost:16686 | Trace backend UI |
+| **Web UI** | **http://localhost:8081** | **Start here** |
+| Aggregator API | http://localhost:8080 | REST endpoint |
+| Aggregator docs | http://localhost:8080/docs | Auto-generated OpenAPI UI |
+| service-a | http://localhost:8001 | Upstream demo API (calls service-b) |
+| service-b | http://localhost:8002 | Flaky downstream — all failure injection here |
+| service-c | http://localhost:8003 | Payment processor demo |
+| service-d | http://localhost:8004 | Inventory service demo |
+| Prometheus | http://localhost:9090 | Metrics query explorer |
+| Loki | http://localhost:3100 | Log store (no UI — query via the aggregator) |
+| Jaeger | http://localhost:16686 | Distributed trace UI |
+| node-exporter | — | Host metrics; scraped by Prometheus, no host port |
 
-### If service-c or service-d build assets are missing in your checkout
+See [`infra/README.md`](infra/README.md) for what each one does and how they connect.
 
-Some partial checkouts may not include demo service build files. Start the core runnable stack with:
-
-```bash
-docker compose up -d --build service-b service-a prometheus node-exporter loki promtail jaeger aggregator frontend
-```
-
-## Configuration reference
-
-Main environment variables (see [.env.example](.env.example)):
-
-Observability backends:
-
-- PROMETHEUS_URL
-- LOKI_URL
-- JAEGER_URL
-
-Aggregator behavior:
-
-- DEFAULT_LOOKBACK_MINUTES
-- MAX_LOG_LINES
-- MAX_TRACES
-
-RCA settings:
-
-- ANTHROPIC_API_KEY
-- RCA_ENABLED
-- RCA_MODE
-- HERMES_API_URL
-- HERMES_API_KEY
-- HERMES_MODEL
-- HERMES_TIMEOUT_SECONDS
-- HERMES_TOOLS_ENABLED
-- HERMES_INVESTIGATION_MODE
-- HERMES_MAX_TOOL_ROUNDS
-- HERMES_MAX_TOOL_CALLS
-- HERMES_TOOL_LOOKBACK_MAX_MINUTES
-
-GitHub enrichment:
-
-- GITHUB_TOKEN
-- GITHUB_REPO
-- GITHUB_DEFAULT_BRANCH
-- GITHUB_PATH_PREFIX
-
-Watchdog and notifications:
-
-- WATCHDOG_ENABLED
-- WATCHDOG_INTERVAL_SECONDS
-- WATCHDOG_LOOKBACK_MINUTES
-- WATCHDOG_ANOMALY_THRESHOLD
-- SLACK_WEBHOOK_URL
-- SNS_TOPIC_ARN
-- SNS_REGION
-- SMTP_HOST
-- SMTP_PORT
-- SMTP_USERNAME
-- SMTP_PASSWORD
-- SMTP_FROM_EMAIL
-- SMTP_USE_STARTTLS
-- ALERT_EMAIL
-- MAILGUN_DOMAIN
-- MAILGUN_API_KEY
-
-Misc:
-
-- ENVIRONMENT
-- HISTORY_DB_PATH
-- LOG_LEVEL
+---
 
 ## Demo scenarios
 
-Built-in scenario IDs available through the Demo panel and /demo/run/{scenario}:
+Failure modes are injected and traffic generated through the **⚙ Demo** panel — no shell
+scripts needed.
 
-- healthy
-- errors
-- slow
-- crash
-- payment_crash
-- inventory_crash
+| Scenario | Target | What it demonstrates |
+|---|---|---|
+| Random 500 errors | service-a / service-b | HTTP error-rate spike, error correlation |
+| Latency spike | service-b | High p99 latency, slow-query detection |
+| Payment crash | service-b | Unhandled exception with a full Python traceback |
+| Gateway timeout | service-c | Three-frame call-chain exception, stack-frame linking in RCA |
+| DB connection lost | service-d | Two-frame call-chain exception, custom error counter |
+| Resilience comparison | service-a / service-b | Retry / circuit-breaker effect on error propagation |
 
 Each scenario fires a burst of requests, then stops, and records the exact
 `window_start`/`window_end`. Pick the target in the sidebar **Service** list and click
@@ -291,32 +214,16 @@ Each scenario fires a burst of requests, then stops, and records the exact
 (which reuses the same window). The Demo panel's **Reset** button restores all services to
 their default (no-failure) state.
 
-## RCA behavior
+---
 
-RCA can run in two modes:
+## Deploying to Kubernetes
 
-- simple
-  - Uses the Anthropic path.
-- hermes
-  - Uses an OpenAI-compatible Hermes API server.
-  - Supports tools_first and dossier investigation modes.
-  - Falls back to simple analyzer when configured and primary execution fails.
+`k8s/` contains manifests to run the demo workloads and the aggregator inside a real
+cluster; `deploy.sh` automates the whole thing on a single Linux host (k3s).
 
-RCA outputs include:
+### One command (k3s)
 
-- summary and root cause
-- confidence
-- supporting evidence
-- structured log evidence
-- recommended actions
-- GitHub search terms
-- optional code references
-
-After a successful RCA, follow-up questions are supported through POST /rca/followup.
-
-## Testing
-
-Install dev dependencies and run tests:
+On the target Linux server, from the repo root:
 
 ```bash
 bash deploy.sh                                  # installs k3s + Helm + the obs stack + the demo
@@ -428,7 +335,7 @@ Tests use mock HTTP clients, so they run without Docker or any live services.
 python -m venv .venv
 source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-pytest
+pytest                        # -v for verbose, -x to stop on first failure
 ```
 
 `tests/test_aggregator.py` covers the correlator rules, the aggregator's fan-out behavior,
@@ -439,78 +346,14 @@ covers the RCA pipeline across failure scenarios with mocked model responses.
 `tests/test_mcp_observability_server.py` the read-only MCP bridge, and `tests/test_demo.py`
 the demo scenario query-window events.
 
-- [tests/test_aggregator.py](tests/test_aggregator.py)
-- [tests/test_rca_scenarios.py](tests/test_rca_scenarios.py)
-- [tests/test_mcp_observability_server.py](tests/test_mcp_observability_server.py)
-- [tests/test_demo.py](tests/test_demo.py)
-
-## Deployment
-
-Kubernetes assets are under [k8s](k8s). The [deploy.sh](deploy.sh) script installs and wires a full k3s-based stack for demo environments.
-
-Quick deploy examples:
-
-```bash
-bash deploy.sh
-ANTHROPIC_API_KEY=sk-ant-... bash deploy.sh
-K3S_EXTRA_SAN=100.x.x.x bash deploy.sh
-```
-
-After deployment, keep the frontend local and point it at the cluster aggregator endpoint from the UI connection panel.
-
-## Folder Structure
-
-```text
-Kubernetes-Observability-Signal-Aggregator/
-├── aggregator/
-│   ├── clients/
-│   ├── core/
-│   ├── models/
-│   ├── output/
-│   ├── main.py
-│   ├── config.py
-│   ├── demo.py
-│   ├── watchdog.py
-│   └── notifier.py
-├── frontend/
-│   ├── css/
-│   ├── js/
-│   │   └── components/
-│   └── index.html
-├── demo/
-│   ├── service-a/
-│   ├── service-b/
-│   ├── service-c/
-│   ├── service-d/
-│   └── scenario_*.sh
-├── infra/
-│   ├── prometheus.yml
-│   ├── loki-config.yml
-│   ├── promtail-config.yml
-│   ├── nginx.conf
-│   └── service-registry.yml
-├── k8s/
-├── tests/
-├── docker-compose.yml
-├── deploy.sh
-├── pyproject.toml
-└── README.md
-```
-
-## Project layout
-
-Top-level directories:
-
-- [aggregator](aggregator): FastAPI backend, clients, correlation, RCA, history, demo, watchdog.
-- [frontend](frontend): Static UI with componentized panels and API integration.
-- [infra](infra): Prometheus, Loki, Promtail, Nginx, service registry configuration.
-- [demo](demo): Demo services and scenario scripts.
-- [k8s](k8s): Kubernetes manifests.
-- [tests](tests): Unit and integration-style tests with mocks.
+---
 
 ## Common issues
 
-Query returns empty panels:
+**Nothing shows up after clicking Query**
+Signals are shown for the last 30 minutes — use the **⚙ Demo** panel to generate traffic
+first. If the sidebar **Service** list is empty, wait a few seconds and reload (it's
+populated from `prometheus.yml` locally, or a ConfigMap in Kubernetes mode).
 
 **"Analyze with AI" shows an error or does nothing**
 In default RCA mode, `ANTHROPIC_API_KEY` is missing/invalid in `.env` (then `docker compose
@@ -524,23 +367,13 @@ only appear in scenarios that produce Python tracebacks (e.g. the crash scenario
 Follow-up requires a completed RCA first. Hermes is the primary follow-up provider; if it's
 unavailable, the Anthropic fallback only works when `ANTHROPIC_API_KEY` is configured.
 
-- Check ANTHROPIC_API_KEY for simple mode.
-- Check RCA_MODE and Hermes connection values for hermes mode.
+**`port is already allocated` / `ports are not available`**
+Another process holds one of the ports, or (on Windows) it's in a reserved range — see
+[Port conflicts](#port-conflicts).
 
-No code references in RCA:
+**`aggregator` container shows `unhealthy`**
+Its health-check uses `wget`, which isn't in the `python:3.11-slim` image — cosmetic; the
+API works fine (`curl http://localhost:8080/health`).
 
-- Check GITHUB_TOKEN and service registry metadata.
-- Stack frame-based linking only appears when traceback-like logs exist.
-
-Watchdog alerts not appearing:
-
-- Ensure watchdog is started from the Watchdog panel or WATCHDOG_ENABLED=true.
-- Ensure monitored services have enough traffic and anomaly confidence crosses threshold.
-
-Port conflicts:
-
-- Remap host ports via a local docker-compose.override.yml when needed.
-
-## License
-
-See repository license and organization policies for usage terms.
+**Stack is slow or containers keep restarting**
+A dozen-ish containers run at once. On machines with under ~8 GB RAM, close other apps first.
