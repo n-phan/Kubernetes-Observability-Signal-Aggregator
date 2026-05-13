@@ -30,7 +30,6 @@ from aggregator.core.timeline import build_timeline
 from aggregator.core.rca_followup import RcaFollowUpAssistant
 from aggregator.core.suspicious_absence import SuspiciousAbsenceDetector
 from aggregator.models.followup import FollowUpMessage, FollowUpResponse
-from aggregator.core.timeline import build_timeline
 from aggregator.models.query import QueryRequest
 from aggregator.models.rca import LogEvidence, RCAResult
 from aggregator.models.result import CorrelationEvent, QueryMeta, UnifiedResult
