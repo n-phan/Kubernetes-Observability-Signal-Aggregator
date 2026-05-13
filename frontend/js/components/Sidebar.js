@@ -161,8 +161,8 @@ const Sidebar = {
     if (mgr) mgr.addEventListener('click', () => { if (window.ServicePanel) ServicePanel.toggle(); });
   },
 
-  // Select a service as the active query target and immediately run a query
-  // against it (one click = pick + query). RCA stays opt-in via the Analyze button.
+  // Select a service as the active query target. (Doesn't change the right-hand
+  // view — the user clicks Query when ready.)
   selectService(name) {
     const sel = $('inp-target');
     if (sel) {
@@ -181,7 +181,5 @@ const Sidebar = {
     );
     // Refresh the cluster panel so its "Pods of <target>" section updates.
     if (typeof ClusterStatusPanel !== 'undefined') ClusterStatusPanel.refresh();
-    // Auto-run a query for the picked service (no-op if one is already in flight).
-    if (typeof runQuery === 'function') runQuery();
   },
 };
