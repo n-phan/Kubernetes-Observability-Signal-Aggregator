@@ -159,6 +159,55 @@
       color: var(--text-dim, #5a6175);
       border-color: var(--text-dim, #5a6175);
     }
+    /* ── Scenario detail panel ── */
+    .demo-detail-panel {
+      border-top: 1px solid var(--border, #1e2330);
+      padding: 14px 16px;
+      background: var(--bg, #080b12);
+    }
+    .demo-detail-head {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .demo-detail-letter {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent, #3dffa0);
+    }
+    .demo-detail-name {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text, #c8cdd8);
+    }
+    .demo-detail-body {
+      font-size: 14px;
+      color: var(--text-dim, #5a6175);
+      line-height: 1.65;
+      white-space: pre-wrap;
+    }
+    .demo-detail-setup {
+      margin-top: 10px;
+      padding: 8px 12px;
+      border-left: 2px solid var(--blue, #38d4f5);
+      background: rgba(56,212,245,0.04);
+      font-size: 14px;
+      color: var(--text-dim, #5a6175);
+      line-height: 1.65;
+    }
+    .demo-detail-setup-label {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--blue, #38d4f5);
+      margin-bottom: 4px;
+    }
+    /* ── Output ── */
     .demo-output {
       display: none;
       border-top: 1px solid var(--border, #1e2330);
@@ -168,7 +217,7 @@
     }
     .demo-output-header {
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 10px;
+      font-size: 12px;
       color: var(--text-dim, #5a6175);
       padding: 8px 16px 4px;
       letter-spacing: 0.08em;
@@ -176,7 +225,7 @@
     }
     .demo-output-log {
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 11px;
+      font-size: 14px;
       line-height: 1.7;
       padding: 4px 16px 12px;
       max-height: 220px;
@@ -200,7 +249,7 @@
     .demo-log-line.done .msg { color: var(--blue, #38d4f5); }
     .demo-hint {
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 11px;
+      font-size: 13px;
       color: var(--blue, #38d4f5);
       padding: 10px 16px;
       border-top: 1px solid var(--border, #1e2330);
@@ -220,46 +269,54 @@
 
   const SCENARIOS = [
     {
-      id:     'healthy',
-      letter: 'A',
-      name:   'Normal operation',
-      desc:   'Resets service-b to clean defaults, then fires 20 requests through service-a. Use this as a baseline before running failure scenarios.',
-      meta:   { 'FAILURE_RATE': '0.00', 'LATENCY_MS': '0ms', 'requests': '20 × /api/data' },
+      id:      'healthy',
+      letter:  'A',
+      name:    'Normal operation',
+      desc:    'Resets service-b to clean defaults, then fires 20 requests through service-a.',
+      details: 'Use this as a baseline before running failure scenarios. Resets FAILURE_RATE to 0.00 and LATENCY_MS to 0 on service-b, then sends 20 requests through service-a → service-b to produce clean logs and traces with no error signals.',
+      meta:    { 'FAILURE_RATE': '0.00', 'LATENCY_MS': '0ms', 'requests': '20 × /api/data' },
     },
     {
-      id:     'errors',
-      letter: 'B',
-      name:   'High error rate',
-      desc:   'Sets 70% failure rate on service-b, then fires 30 requests through service-a.',
-      meta:   { 'FAILURE_RATE': '0.70', 'requests': '30 × /api/data' },
+      id:      'errors',
+      letter:  'B',
+      name:    'High error rate',
+      desc:    'Sets 70% failure rate on service-b, then fires 30 requests through service-a.',
+      details: 'Configures service-b to return HTTP 500 on 70% of calls, then sends 30 requests through service-a. Produces a log_error_burst incident signature with cascading errors visible in both logs and traces. Good for demonstrating RCA on downstream dependency failures.',
+      meta:    { 'FAILURE_RATE': '0.70', 'requests': '30 × /api/data' },
     },
     {
-      id:     'slow',
-      letter: 'C',
-      name:   'Latency spike',
-      desc:   'Adds 2 second delay to service-b /data, then fires 10 direct requests.',
-      meta:   { 'LATENCY_MS': '2000', 'requests': '10 × /data' },
+      id:      'slow',
+      letter:  'C',
+      name:    'Latency spike',
+      desc:    'Adds a 2-second delay to service-b /data, then fires 10 direct requests.',
+      details: 'Configures service-b to sleep 2000 ms before responding on /data, then fires 10 requests directly at service-b. Produces high-latency spans in traces — useful for demonstrating latency-based incident detection.',
+      meta:    { 'LATENCY_MS': '2000', 'requests': '10 × /data' },
     },
     {
-      id:     'crash',
-      letter: 'D',
-      name:   'Payment crash',
-      desc:   'Fires 15 requests to /crash — triggers a full Python traceback each time.',
-      meta:   { 'behavior': 'always crashes', 'exception': 'ValueError', 'requests': '15 × /crash' },
+      id:      'crash',
+      letter:  'D',
+      name:    'Payment crash',
+      desc:    'Fires 15 requests to /crash — triggers a full Python traceback each time.',
+      details: 'Sends 15 requests to service-b\'s /crash endpoint, which always raises a ValueError. The full Python traceback is logged to stdout on each request, producing a clean repeating stack-trace pattern for RCA to identify and explain.',
+      meta:    { 'behavior': 'always crashes', 'exception': 'ValueError', 'requests': '15 × /crash' },
     },
     {
-      id:     'payment_crash',
-      letter: 'E',
-      name:   'Gateway timeout',
-      desc:   'Sets GATEWAY_FAIL=1 on service-c and fires 15 POST /pay requests. Every call raises GatewayTimeoutError inside charge_gateway() — the full three-frame traceback (pay → process_payment → charge_gateway) is logged to stdout. Configure the service-c GitHub repo in settings so RCA links directly to charge_gateway() in main.py.',
-      meta:   { 'GATEWAY_FAIL': '1', 'exception': 'GatewayTimeoutError', 'requests': '15 × /pay' },
+      id:      'payment_crash',
+      letter:  'E',
+      name:    'Gateway timeout',
+      desc:    'Sets GATEWAY_FAIL=1 on service-c and fires 15 POST /pay requests — every call raises GatewayTimeoutError.',
+      details: 'Every /pay call follows the chain pay → process_payment → charge_gateway, raising GatewayTimeoutError at the bottom frame. The full three-frame traceback is logged to stdout on each request, giving RCA a clear call-stack to work with.',
+      setup:   'In Settings, configure the service-c GitHub repo URL. This lets RCA link the charge_gateway() stack frame directly to main.py in the repo.',
+      meta:    { 'GATEWAY_FAIL': '1', 'exception': 'GatewayTimeoutError', 'requests': '15 × /pay' },
     },
     {
-      id:     'inventory_crash',
-      letter: 'F',
-      name:   'DB connection lost',
-      desc:   'Sets DB_FAIL=1 on service-d and fires 15 GET /stock/widget-001 requests. Every call raises DatabaseConnectionError inside query_database() — the full traceback (get_stock → lookup_inventory → query_database) is logged to stdout. Configure the service-d GitHub repo in settings so RCA links directly to query_database() in main.py.',
-      meta:   { 'DB_FAIL': '1', 'exception': 'DatabaseConnectionError', 'requests': '15 × /stock/{item_id}' },
+      id:      'inventory_crash',
+      letter:  'F',
+      name:    'DB connection lost',
+      desc:    'Sets DB_FAIL=1 on service-d and fires 15 GET /stock requests — every call raises DatabaseConnectionError.',
+      details: 'Every /stock call follows the chain get_stock → lookup_inventory → query_database, raising DatabaseConnectionError at the bottom frame. The full three-frame traceback is logged to stdout on each request.',
+      setup:   'In Settings, configure the service-d GitHub repo URL. This lets RCA link the query_database() stack frame directly to main.py in the repo.',
+      meta:    { 'DB_FAIL': '1', 'exception': 'DatabaseConnectionError', 'requests': '15 × /stock/{item_id}' },
     },
   ];
 
@@ -293,7 +350,6 @@
         <div class="demo-scenario-card">
           <div class="demo-scenario-letter">${s.letter}</div>
           <div class="demo-scenario-name">${s.name}</div>
-          <div class="demo-scenario-desc">${s.desc}</div>
           <div class="demo-scenario-meta">${metaHtml}</div>
           <button class="demo-btn-run"
                   id="demo-btn-${s.id}"
@@ -318,6 +374,18 @@
         </div>
 
         <div class="demo-scenarios">${cardsHtml}</div>
+
+        <div class="demo-detail-panel" id="demo-detail-panel" style="display:none">
+          <div class="demo-detail-head">
+            <span class="demo-detail-letter" id="demo-detail-letter"></span>
+            <span class="demo-detail-name" id="demo-detail-name"></span>
+          </div>
+          <div class="demo-detail-body" id="demo-detail-body"></div>
+          <div class="demo-detail-setup" id="demo-detail-setup" style="display:none">
+            <div class="demo-detail-setup-label">Setup</div>
+            <div id="demo-detail-setup-text"></div>
+          </div>
+        </div>
 
         <div class="demo-output" id="demo-output">
           <div class="demo-output-header">Output</div>
@@ -354,6 +422,27 @@
 
   function _showOutput() {
     $('demo-output').classList.add('visible');
+  }
+
+  // ── Detail panel ─────────────────────────────────────────────────────────
+
+  function _showDetails(scenario) {
+    const panel = $('demo-detail-panel');
+    if (!panel) return;
+    $('demo-detail-letter').textContent = scenario.letter + ' —';
+    $('demo-detail-name').textContent   = scenario.name;
+    $('demo-detail-body').textContent   = scenario.details || '';
+
+    const setupWrap = $('demo-detail-setup');
+    const setupText = $('demo-detail-setup-text');
+    if (scenario.setup) {
+      setupText.textContent = scenario.setup;
+      setupWrap.style.display = 'block';
+    } else {
+      setupWrap.style.display = 'none';
+    }
+
+    panel.style.display = 'block';
   }
 
   // ── Config badge updater ─────────────────────────────────────────────────
@@ -476,6 +565,10 @@
       if (_running) return;
       _setRunning(true);
       _clearLog();
+
+      const scenarioDef = SCENARIOS.find(s => s.id === scenario);
+      if (scenarioDef) _showDetails(scenarioDef);
+
       _showOutput();
 
       try {
