@@ -72,40 +72,27 @@ class SignalAggregator:
         self._suspicious_absence_detector = (
             suspicious_absence_detector or SuspiciousAbsenceDetector()
         )
-        simple_rca_analyzer = (
-            RCAAnalyzer(
-                api_key=settings.anthropic_api_key,
-                repo=settings.github_repo,
-            )
-            if settings.rca_enabled
-            else None
-        )
+        self._simple_rca_analyzer = None
+        self._hermes_rca_analyzer = None
         if rca_analyzer is not None:
             self._rca_analyzer = rca_analyzer
             self._fallback_rca_analyzer = None
+            if isinstance(rca_analyzer, RCAAnalyzer):
+                self._simple_rca_analyzer = rca_analyzer
+            elif isinstance(rca_analyzer, HermesRCAAgent):
+                self._hermes_rca_analyzer = rca_analyzer
         elif not settings.rca_enabled:
             self._rca_analyzer = None
             self._fallback_rca_analyzer = None
-        elif settings.rca_mode == "hermes":
-            self._rca_analyzer = HermesRCAAgent(
-                api_url=settings.hermes_api_url,
-                api_key=settings.hermes_api_key,
-                model=settings.hermes_model,
-                timeout_seconds=settings.hermes_timeout_seconds,
-                prometheus=self._prometheus,
-                loki=self._loki,
-                jaeger=self._jaeger,
-                correlator=self._correlator,
-                tools_enabled=settings.hermes_tools_enabled,
-                investigation_mode=settings.hermes_investigation_mode,
-                max_tool_rounds=settings.hermes_max_tool_rounds,
-                max_tool_calls=settings.hermes_max_tool_calls,
-                tool_lookback_max_minutes=settings.hermes_tool_lookback_max_minutes,
-            )
-            self._fallback_rca_analyzer = simple_rca_analyzer
         else:
-            self._rca_analyzer = simple_rca_analyzer
-            self._fallback_rca_analyzer = None
+            self._simple_rca_analyzer = self._make_simple_rca_analyzer()
+            self._hermes_rca_analyzer = self._make_hermes_rca_agent()
+            if settings.rca_mode == "hermes":
+                self._rca_analyzer = self._hermes_rca_analyzer
+                self._fallback_rca_analyzer = self._simple_rca_analyzer
+            else:
+                self._rca_analyzer = self._simple_rca_analyzer
+                self._fallback_rca_analyzer = None
         self._followup_assistant = followup_assistant
         self._github_linker = github_linker
 
@@ -186,20 +173,10 @@ class SignalAggregator:
         )
 
         # RCA — only runs when explicitly requested and error signals exist
-        if request.include_rca and self._rca_analyzer:
-            # RCAAnalyzer honours the per-request LLM override (Config LLM panel);
-            # HermesRCAAgent does not take it.
-            async def _run_analyzer(analyzer):
-                if isinstance(analyzer, RCAAnalyzer):
-                    return await analyzer.analyze(result, request.llm)
-                return await analyzer.analyze(result)
-
-            rca = await _run_analyzer(self._rca_analyzer)
-            if self._fallback_rca_analyzer and not rca.performed and rca.error:
-                logger.warning("Primary RCA failed; falling back to simple RCA: %s", rca.error)
-                fallback_rca = await _run_analyzer(self._fallback_rca_analyzer)
-                if fallback_rca.performed:
-                    rca = fallback_rca
+        if request.include_rca:
+            rca = await self._run_rca(result, request)
+            if rca is None:
+                rca = result.rca
             if rca.performed:
                 if self._github_linker:
                     rca = await self._github_linker.enrich(rca, logs)
@@ -236,12 +213,86 @@ class SignalAggregator:
 
         return result
 
+    def _make_simple_rca_analyzer(self) -> RCAAnalyzer:
+        return RCAAnalyzer(
+            api_key=settings.anthropic_api_key,
+            repo=settings.github_repo,
+            provider=settings.llm_provider,
+            openai_api_key=settings.openai_api_key,
+            openai_model=settings.openai_model,
+            openai_api_url=settings.openai_api_url,
+        )
+
+    def _make_hermes_rca_agent(self) -> HermesRCAAgent:
+        return HermesRCAAgent(
+            api_url=settings.hermes_api_url,
+            api_key=settings.effective_hermes_api_key,
+            model=settings.hermes_model,
+            timeout_seconds=settings.hermes_timeout_seconds,
+            prometheus=self._prometheus,
+            loki=self._loki,
+            jaeger=self._jaeger,
+            correlator=self._correlator,
+            tools_enabled=settings.hermes_tools_enabled,
+            investigation_mode=settings.hermes_investigation_mode,
+            max_tool_rounds=settings.hermes_max_tool_rounds,
+            max_tool_calls=settings.hermes_max_tool_calls,
+            tool_lookback_max_minutes=settings.hermes_tool_lookback_max_minutes,
+        )
+
+    async def _run_rca(
+        self,
+        result: UnifiedResult,
+        request: QueryRequest,
+    ) -> RCAResult | None:
+        primary, fallback = self._select_rca_analyzers(request)
+        if primary is None:
+            if request.rca_backend:
+                return RCAResult(
+                    performed=False,
+                    error=f"RCA backend '{request.rca_backend}' is not configured",
+                )
+            return None
+
+        rca = await self._run_rca_analyzer(primary, result, request)
+        if fallback and not rca.performed and rca.error:
+            logger.warning("Primary RCA failed; falling back to simple RCA: %s", rca.error)
+            fallback_rca = await self._run_rca_analyzer(fallback, result, request)
+            if fallback_rca.performed:
+                return fallback_rca
+        return rca
+
+    def _select_rca_analyzers(self, request: QueryRequest):
+        if request.rca_backend == "llm":
+            return self._simple_rca_analyzer, None
+        if request.rca_backend == "hermes":
+            primary = self._hermes_rca_analyzer
+            fallback = self._simple_rca_analyzer
+            if fallback is primary:
+                fallback = None
+            return primary, fallback
+        return self._rca_analyzer, self._fallback_rca_analyzer
+
+    async def _run_rca_analyzer(
+        self,
+        analyzer,
+        result: UnifiedResult,
+        request: QueryRequest,
+    ) -> RCAResult:
+        # RCAAnalyzer honours the per-request LLM override (Config LLM panel);
+        # HermesRCAAgent does not take it.
+        if isinstance(analyzer, RCAAnalyzer):
+            return await analyzer.analyze(result, request.llm)
+        return await analyzer.analyze(result)
+
     async def follow_up(
         self,
         *,
         incident: UnifiedResult,
         question: str,
         history: list[FollowUpMessage],
+        rca_backend: str | None = None,
+        llm=None,
     ) -> FollowUpResponse:
         if not incident.rca.performed:
             raise ValueError("RCA must be performed before asking follow-up questions")
@@ -258,13 +309,15 @@ class SignalAggregator:
             incident=incident,
             question=question,
             history=history,
+            rca_backend=rca_backend,
+            llm=llm,
         )
 
     def _make_followup_assistant(self) -> RcaFollowUpAssistant:
         return RcaFollowUpAssistant(
             hermes=HermesRCAAgent(
                 api_url=settings.hermes_api_url,
-                api_key=settings.hermes_api_key,
+                api_key=settings.effective_hermes_api_key,
                 model=settings.hermes_model,
                 timeout_seconds=settings.hermes_timeout_seconds,
                 prometheus=self._prometheus,
@@ -278,6 +331,10 @@ class SignalAggregator:
                 tool_lookback_max_minutes=settings.hermes_tool_lookback_max_minutes,
             ),
             anthropic_api_key=settings.anthropic_api_key,
+            llm_provider=settings.llm_provider,
+            openai_api_key=settings.openai_api_key,
+            openai_model=settings.openai_model,
+            openai_api_url=settings.openai_api_url,
         )
 
     # ------------------------------------------------------------------
@@ -374,15 +431,21 @@ class SignalAggregator:
 
     async def close(self) -> None:
         """Close all underlying HTTP clients."""
+        seen: set[int] = set()
         closers = [
             self._prometheus.close(),
             self._loki.close(),
             self._jaeger.close(),
         ]
-        if self._rca_analyzer:
-            closers.append(self._rca_analyzer.close())
-        if self._fallback_rca_analyzer:
-            closers.append(self._fallback_rca_analyzer.close())
+        for analyzer in (
+            self._rca_analyzer,
+            self._fallback_rca_analyzer,
+            self._simple_rca_analyzer,
+            self._hermes_rca_analyzer,
+        ):
+            if analyzer and id(analyzer) not in seen:
+                seen.add(id(analyzer))
+                closers.append(analyzer.close())
         if self._followup_assistant:
             closers.append(self._followup_assistant.close())
         if self._github_linker:

@@ -45,14 +45,19 @@ class Settings(BaseSettings):
     api_port: int = 8080
     log_level: str = "info"
 
-    # RCA — Anthropic
+    # RCA — fallback/simple LLM analyzer
+    llm_provider: str = "anthropic"  # anthropic | claude | openai | chatgpt
     anthropic_api_key: str | None = None
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5.5"
+    openai_api_url: str = "https://api.openai.com/v1/responses"
     rca_enabled: bool = True
     rca_mode: str = "simple"  # simple | hermes
 
     # RCA — Hermes agent API server
     hermes_api_url: str = "http://localhost:8642/v1"
     hermes_api_key: str | None = None
+    api_server_key: str | None = None
     hermes_model: str = "hermes-agent"
     hermes_timeout_seconds: float = 90.0
     hermes_tools_enabled: bool = True
@@ -60,6 +65,10 @@ class Settings(BaseSettings):
     hermes_max_tool_rounds: int = 4
     hermes_max_tool_calls: int = 8
     hermes_tool_lookback_max_minutes: int = 120
+
+    @property
+    def effective_hermes_api_key(self) -> str | None:
+        return self.api_server_key or self.hermes_api_key
 
     # RCA — GitHub
     github_token: str | None = None
@@ -97,9 +106,38 @@ class Settings(BaseSettings):
     alert_email: str | None = None
 
     @field_validator("prometheus_url", "loki_url", "jaeger_url", "hermes_api_url", mode="before")
+    # Legacy Mailgun settings (kept for backward compatibility)
+    mailgun_domain: str | None = None     # e.g. "observability.local"
+    mailgun_api_key: str | None = None
+
+    # ── Watchdog Mode ────────────────────────────────────────────────────
+    # Optional: Continuously monitor services for anomalies
+    watchdog_enabled: bool = False
+    watchdog_interval_seconds: int = 60
+    watchdog_lookback_minutes: int = 15
+    watchdog_anomaly_threshold: float = 0.7  # confidence threshold (0.0-1.0)
+
+    @field_validator(
+        "prometheus_url",
+        "loki_url",
+        "jaeger_url",
+        "hermes_api_url",
+        "openai_api_url",
+        mode="before",
+    )
     @classmethod
     def strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @field_validator("llm_provider", mode="before")
+    @classmethod
+    def validate_llm_provider(cls, v: str) -> str:
+        provider = (v or "anthropic").strip().lower()
+        if provider not in {"anthropic", "claude", "openai", "chatgpt"}:
+            raise ValueError(
+                "LLM_PROVIDER must be one of 'anthropic', 'claude', 'openai', or 'chatgpt'"
+            )
+        return provider
 
     @field_validator("rca_mode", mode="before")
     @classmethod
