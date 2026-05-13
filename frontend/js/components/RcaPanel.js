@@ -138,7 +138,7 @@ class RcaPanel {
           <div class="code-ref-path">${escHtml(r.path)}${r.line_number ? '#L' + r.line_number : ''}</div>
           <div class="code-ref-relevance">${escHtml(r.relevance || '')}</div>
         </div>
-        ${href ? `<a class="code-ref-link" href="${href}">↗ GitHub</a>` : ''}
+        ${href ? `<a class="code-ref-link" href="${href}" target="_blank" rel="noopener noreferrer">↗ GitHub</a>` : ''}
       </div>
     `}).join('');
 
