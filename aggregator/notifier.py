@@ -97,11 +97,16 @@ class Notifier:
         url = f"{BARK_SERVER.rstrip('/')}/{b.device_key}"
         # Bark level: critical | active | timeSensitive | passive.
         level = {"error": "critical", "warn": "timeSensitive"}.get(severity, "active")
+        # Group per service (not a global "watchdog" group) so multiple services
+        # don't collapse; isArchive=1 keeps every alert in history; sound makes
+        # repeats actually audible instead of silent.
         payload = {
             "title": f"Watchdog · {severity.upper()} · {service}",
             "body":  summary or details or "anomaly detected",
-            "group": "watchdog",
+            "group": f"watchdog-{service}",
             "level": level,
+            "isArchive": "1",
+            "sound":  "alarm" if severity == "error" else "bell",
         }
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
