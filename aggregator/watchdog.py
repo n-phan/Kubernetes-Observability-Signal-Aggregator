@@ -12,6 +12,7 @@ import yaml
 from aggregator.config import settings
 from aggregator.models.query import QueryRequest
 from aggregator.models.result import UnifiedResult
+from aggregator.notification_config import NotificationConfig, load_config, save_config, merge_incoming
 from aggregator.notifier import Notifier
 
 logger = logging.getLogger(__name__)
@@ -31,15 +32,30 @@ class AutoWatchdog:
         self._task: asyncio.Task | None = None
         self._alerts: list[dict] = []
         self._cfg = WatchdogConfig()
-        self._notifier = Notifier(
-            smtp_host=settings.smtp_host,
-            smtp_port=settings.smtp_port,
-            smtp_username=settings.smtp_username,
-            smtp_password=settings.smtp_password,
-            smtp_from_email=settings.smtp_from_email,
-            smtp_use_starttls=settings.smtp_use_starttls,
-            alert_email=settings.alert_email,
+        self._notifier = Notifier(load_config())
+
+    # ── Notification config (used by /api/watchdog/notifications) ────────────
+
+    def get_notification_config(self) -> dict:
+        """Public view of the current config — secrets masked."""
+        return self._notifier.config.public()
+
+    def update_notification_config(self, incoming: dict) -> dict:
+        """Merge a partial UI update, persist, and hot-swap into the notifier."""
+        merged = merge_incoming(self._notifier.config, incoming or {})
+        save_config(merged)
+        self._notifier.update_config(merged)
+        return merged.public()
+
+    async def test_notification(self) -> dict:
+        """Fire a test notification through every enabled channel."""
+        sent = await self._notifier.notify(
+            service="test",
+            severity="info",
+            summary="Watchdog test notification",
+            details="Triggered manually from the UI",
         )
+        return {"sent": sent}
 
     def status(self) -> dict[str, object]:
         return {

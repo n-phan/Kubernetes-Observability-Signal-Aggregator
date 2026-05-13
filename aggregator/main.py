@@ -470,3 +470,27 @@ async def clear_watchdog_alerts() -> dict[str, object]:
         raise HTTPException(status_code=503, detail="Watchdog not initialised")
     _watchdog.clear_alerts()
     return {"ok": True}
+
+
+# ── Notification config ───────────────────────────────────────────────────────
+
+
+@app.get("/api/watchdog/notifications")
+async def watchdog_notifications_get() -> dict:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    return _watchdog.get_notification_config()
+
+
+@app.post("/api/watchdog/notifications")
+async def watchdog_notifications_set(payload: dict) -> dict:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    return _watchdog.update_notification_config(payload)
+
+
+@app.post("/api/watchdog/notifications/test")
+async def watchdog_notifications_test() -> dict:
+    if _watchdog is None:
+        raise HTTPException(status_code=503, detail="Watchdog not initialised")
+    return await _watchdog.test_notification()

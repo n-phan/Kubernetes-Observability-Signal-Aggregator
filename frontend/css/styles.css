@@ -818,6 +818,54 @@ main {
 .watchdog-alert.error { border-color: rgba(255, 78, 106, 0.6); }
 .watchdog-alert-time { margin-top: 4px; color: var(--text-muted); font-size: 11px; }
 
+/* ── Notifications config inside the Watchdog panel ── */
+.wd-notify-section {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.wd-notify-title {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--accent);
+  margin-bottom: 4px;
+}
+.wd-notify-note { font-size: 11px; color: var(--text-muted); margin-bottom: 12px; }
+.wd-notify-block {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--bg-panel);
+}
+.wd-notify-head {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 12px; color: var(--text);
+  margin-bottom: 8px;
+}
+.wd-notify-head label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.wd-notify-hint { color: var(--text-muted); font-size: 11px; margin-left: auto; }
+.wd-notify-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px 10px;
+}
+.wd-notify-fields .field { display: flex; flex-direction: column; gap: 3px; }
+.wd-notify-fields .field label { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+.wd-notify-fields .field input,
+.wd-notify-fields .field select {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 7px;
+  outline: none;
+}
+.wd-notify-fields .field input:focus,
+.wd-notify-fields .field select:focus { border-color: var(--accent); }
+.wd-notify-fields .wd-notify-wide { grid-column: 1 / -1; }
+
 .timeline-track-wrap {
   position: relative;
   margin: 8px 0 14px;
