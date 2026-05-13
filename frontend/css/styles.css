@@ -395,6 +395,21 @@ header {
 .status-dot.mock    { background: var(--warn); }
 .status-dot.error   { background: var(--error); }
 
+/* GitHub source link — bottom-aligned to the query bar, hover lights up accent. */
+.gh-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-end;
+  margin-bottom: 6px;
+  margin-left: auto;          /* push to far right of the query bar */
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color 0.15s, transform 0.1s;
+}
+.gh-link:hover   { color: var(--accent); }
+.gh-link:active  { transform: translateY(1px); }
+
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 @keyframes spin  { to { transform: rotate(360deg); } }
 
