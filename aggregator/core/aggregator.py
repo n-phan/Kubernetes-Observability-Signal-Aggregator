@@ -24,7 +24,10 @@ from aggregator.core.correlator import Correlator
 from aggregator.core.hermes_rca_agent import HermesRCAAgent
 from aggregator.core.rca_analyzer import RCAAnalyzer
 from aggregator.core.rca_followup import RcaFollowUpAssistant
-from aggregator.core.suspicious_absence import SuspiciousAbsenceDetector
+from aggregator.core.suspicious_absence import (
+    SUSPICIOUS_ABSENCE_KINDS,
+    SuspiciousAbsenceDetector,
+)
 from aggregator.core.timeline import build_timeline
 from aggregator.models.followup import FollowUpMessage, FollowUpResponse
 from aggregator.models.query import QueryRequest
@@ -188,10 +191,14 @@ class SignalAggregator:
 
         # History — record notable queries and attach recurrence info
         # ("has this happened before?"). Best-effort; never fails the query.
+        real_correlations = [
+            c for c in correlations
+            if c.severity == "error" or c.kind not in SUSPICIOUS_ABSENCE_KINDS
+        ]
         notable = (
             logs.error_count > 0
             or traces.error_trace_count > 0
-            or bool(correlations)
+            or bool(real_correlations)
             or result.rca.performed
         )
         if notable:

@@ -1,7 +1,6 @@
 """Shared RCA gating rules."""
 from __future__ import annotations
 
-from aggregator.core.suspicious_absence import is_suspicious_absence_event
 from aggregator.models.result import UnifiedResult
 from aggregator.models.signals import MetricsSignal
 
@@ -15,7 +14,6 @@ def should_run_rca(result: UnifiedResult) -> bool:
     return (
         result.logs.error_count > 0
         or any(event.severity == "error" for event in result.correlations)
-        or any(is_suspicious_absence_event(event) for event in result.correlations)
         or result.traces.error_trace_count > 0
         or _has_slow_traces(result)
         or has_latency_metric_anomaly(result.metrics)
