@@ -17,7 +17,7 @@ const Sidebar = {
     host.innerHTML = `
       <div class="sb-brand">
         <span class="sb-brand-icon">◎</span>
-        <span class="sb-brand-text">OBS</span>
+        <span class="sb-brand-text">OSA</span>
         <button class="sb-collapse" id="sb-collapse" title="Collapse / expand">«</button>
       </div>
       <nav class="sb-nav">
